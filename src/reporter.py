@@ -174,7 +174,13 @@ def generate_report_html(
         <h2 style="color: #334155; margin-top: 30px;">Přehled trhu</h2>
         <img src="cid:{scatter_cid}" style="width: 100%; max-width: 700px;" alt="Graf nemovitostí" />
 
-        <hr style="margin-top: 30px; border: none; border-top: 1px solid #e2e8f0;" />
+        <div style="background: #f1f5f9; padding: 12px 16px; border-radius: 8px; margin-top: 30px;">
+            <a href="https://drive.google.com/drive/folders/1YfuWoaifh662Qd1YdIUO6NBGO0GZqgKt" style="color: #2563eb; font-weight: bold;">
+                Všechny nabídky na Google Drive
+            </a>
+        </div>
+
+        <hr style="margin-top: 20px; border: none; border-top: 1px solid #e2e8f0;" />
         <p style="font-size: 0.85em; color: #94a3b8;">
             Generováno automaticky. Skóre zohledňuje: cenovou výhodnost (35 %),
             zeleň (25 %), dopravní dostupnost do Prahy (20 %), počet pokojů (10 %),
