@@ -219,17 +219,17 @@ def identify_outliers(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
 def identify_categorized_picks(
     df: pd.DataFrame,
     per_category: int = 5,
-    top_composite_threshold: float = 85.0,
+    top_composite_max: int = 10,
+    top_composite_percentile: float = 95.0,
 ) -> dict[str, pd.DataFrame]:
     """Identify interesting properties in three categories.
 
     Returns dict with keys:
-    - "top_composite": ALL listings scoring above top_composite_threshold
+    - "top_composite": top percentile listings, capped at top_composite_max
     - "best_value": highest price_score (best deals per m2)
     - "best_location": highest transit + greenery, regardless of price
 
-    Each category is deduplicated -- a listing appears only in its
-    highest-ranked category.
+    Each listing appears in at most one category (highest priority first).
     """
     scored = df.copy()
     for col in ["composite_score", "price_score", "transit_dim", "greenery_dim"]:
@@ -245,9 +245,10 @@ def identify_categorized_picks(
     seen_ids = set()
     result = {}
 
-    # 1. Top composite -- all above threshold, no cap
-    top = scored[scored["composite_score"] >= top_composite_threshold]
-    top = top.sort_values("composite_score", ascending=False)
+    # 1. Top composite -- above P95 (or P85 for small sets), capped
+    threshold = scored["composite_score"].quantile(top_composite_percentile / 100)
+    top = scored[scored["composite_score"] >= threshold]
+    top = top.sort_values("composite_score", ascending=False).head(top_composite_max)
     seen_ids.update(top["property_id"].tolist())
     result["top_composite"] = top
 
@@ -257,7 +258,7 @@ def identify_categorized_picks(
     seen_ids.update(val["property_id"].tolist())
     result["best_value"] = val
 
-    # 3. Best location (transit + greenery combined, price > 100k to filter junk)
+    # 3. Best location (transit + greenery combined)
     loc = scored[scored["price_score"].notna()]
     loc = loc.sort_values("location_combined", ascending=False)
     loc = loc[~loc["property_id"].isin(seen_ids)].head(per_category)
