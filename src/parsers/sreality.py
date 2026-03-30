@@ -80,6 +80,8 @@ def parse_email_html(html: str) -> list[dict]:
 def fetch_saved_search_listings(
     search_id: str,
     session: requests.Session,
+    region_id: int = 10,
+    district_ids: str = "56|51|55",
     max_pages: int = 3,
     per_page: int = 20,
 ) -> list[dict]:
@@ -87,6 +89,8 @@ def fetch_saved_search_listings(
 
     The saved search page is a React SPA, but we can query the API directly.
     We try the estates endpoint with pagination to get recent listings.
+    Region/district IDs are passed as belt-and-suspenders filter alongside
+    the watchdog param (which alone does not filter results).
     """
     all_estates = []
 
@@ -94,6 +98,8 @@ def fetch_saved_search_listings(
         url = f"{SREALITY_API_BASE}/estates"
         params = {
             "category_type_cb": 1,  # sale
+            "locality_region_id": region_id,
+            "locality_district_id": district_ids,
             "per_page": per_page,
             "page": page,
             "watchdog": search_id,
@@ -276,6 +282,8 @@ def enrich_record_with_detail(
 def process_email(
     html: str,
     session: requests.Session,
+    region_id: int = 10,
+    district_ids: str = "56|51|55",
     delay_range: tuple[float, float] = (2.0, 4.0),
     enrich_details: bool = False,
 ) -> list[PropertyRecord]:
@@ -298,6 +306,8 @@ def process_email(
 
         estates = fetch_saved_search_listings(
             search["search_id"], session,
+            region_id=region_id,
+            district_ids=district_ids,
         )
 
         for estate in estates:
@@ -308,6 +318,68 @@ def process_email(
             all_records.append(record)
 
     logger.info("Total sreality records from email: %d", len(all_records))
+    return all_records
+
+
+def scrape_region_listings(
+    session: requests.Session,
+    region_id: int = 10,
+    district_ids: str = "56|51|55",
+    per_page: int = 500,
+    delay_range: tuple[float, float] = (1.0, 2.0),
+) -> list[PropertyRecord]:
+    """Scrape full regional inventory from the sreality API.
+
+    Paginates through all sale listings in the given region + districts.
+    Returns summary-level PropertyRecords (no individual detail enrichment).
+    """
+    all_records = []
+    page = 1
+
+    while True:
+        url = f"{SREALITY_API_BASE}/estates"
+        params = {
+            "category_type_cb": 1,  # sale
+            "locality_region_id": region_id,
+            "locality_district_id": district_ids,
+            "per_page": per_page,
+            "page": page,
+        }
+
+        try:
+            resp = session.get(url, params=params, timeout=30)
+            if resp.status_code != 200:
+                logger.warning(
+                    "Sreality API returned %d on page %d, stopping",
+                    resp.status_code, page,
+                )
+                break
+
+            data = resp.json()
+            estates = data.get("_embedded", {}).get("estates", [])
+            if not estates:
+                break
+
+            for estate in estates:
+                all_records.append(estate_summary_to_record(estate))
+
+            result_size = data.get("result_size", 0)
+            logger.info(
+                "Sreality scrape page %d: %d estates (total so far: %d / %d)",
+                page, len(estates), len(all_records), result_size,
+            )
+
+            if len(all_records) >= result_size:
+                break
+
+        except requests.RequestException:
+            logger.warning("Failed to fetch sreality API page %d", page)
+            break
+
+        page += 1
+        time.sleep(random.uniform(*delay_range))
+
+    logger.info("Sreality region scrape complete: %d records", len(all_records))
     return all_records
 
 

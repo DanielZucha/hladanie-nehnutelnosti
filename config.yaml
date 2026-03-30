@@ -14,7 +14,11 @@ email:
 search:
   regions:
     - "Praha"
-    - "Stredocesky kraj"
+    - "Praha-východ"
+    - "Kolín"
+    - "Nymburk"
+  sreality_region_id: 10           # Praha
+  sreality_district_ids: "56|51|55"  # Praha-východ, Kolín, Nymburk
   min_rooms: 3
   property_types:
     - "apartment"

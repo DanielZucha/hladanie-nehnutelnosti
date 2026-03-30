@@ -18,7 +18,9 @@ class EmailConfig(BaseModel):
 
 
 class SearchConfig(BaseModel):
-    regions: list[str] = ["Praha", "Stredocesky kraj"]
+    regions: list[str] = ["Praha", "Praha-východ", "Kolín", "Nymburk"]
+    sreality_region_id: int = 10
+    sreality_district_ids: str = "56|51|55"
     min_rooms: int = 3
     property_types: list[str] = ["apartment", "house"]
 
