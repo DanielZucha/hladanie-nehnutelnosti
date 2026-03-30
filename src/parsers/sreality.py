@@ -321,33 +321,23 @@ def process_email(
     return all_records
 
 
-def scrape_region_listings(
+def _paginate_estates(
     session: requests.Session,
-    region_id: int = 10,
-    district_ids: str = "56|51|55",
+    params: dict,
     per_page: int = 500,
     delay_range: tuple[float, float] = (1.0, 2.0),
-) -> list[PropertyRecord]:
-    """Scrape full regional inventory from the sreality API.
-
-    Paginates through all sale listings in the given region + districts.
-    Returns summary-level PropertyRecords (no individual detail enrichment).
-    """
-    all_records = []
+) -> list[dict]:
+    """Paginate through sreality estates endpoint with given filter params."""
+    all_estates = []
     page = 1
+    params = {**params, "per_page": per_page}
 
     while True:
-        url = f"{SREALITY_API_BASE}/estates"
-        params = {
-            "category_type_cb": 1,  # sale
-            "locality_region_id": region_id,
-            "locality_district_id": district_ids,
-            "per_page": per_page,
-            "page": page,
-        }
-
+        params["page"] = page
         try:
-            resp = session.get(url, params=params, timeout=30)
+            resp = session.get(
+                f"{SREALITY_API_BASE}/estates", params=params, timeout=30,
+            )
             if resp.status_code != 200:
                 logger.warning(
                     "Sreality API returned %d on page %d, stopping",
@@ -360,16 +350,14 @@ def scrape_region_listings(
             if not estates:
                 break
 
-            for estate in estates:
-                all_records.append(estate_summary_to_record(estate))
-
+            all_estates.extend(estates)
             result_size = data.get("result_size", 0)
             logger.info(
                 "Sreality scrape page %d: %d estates (total so far: %d / %d)",
-                page, len(estates), len(all_records), result_size,
+                page, len(estates), len(all_estates), result_size,
             )
 
-            if len(all_records) >= result_size:
+            if len(all_estates) >= result_size:
                 break
 
         except requests.RequestException:
@@ -378,6 +366,62 @@ def scrape_region_listings(
 
         page += 1
         time.sleep(random.uniform(*delay_range))
+
+    return all_estates
+
+
+# Sreality API category_sub_cb values for apartment sizes 3+kk and larger
+APT_SUB_CBS = "6|7|8|9|10|11|12|16"  # 3+kk,3+1,4+kk,4+1,5+kk,5+1,6+,atypicky
+
+
+def scrape_region_listings(
+    session: requests.Session,
+    region_id: int = 10,
+    district_ids: str = "56|51|55",
+    price_max: int = 17_000_000,
+    per_page: int = 500,
+    delay_range: tuple[float, float] = (1.0, 2.0),
+) -> list[PropertyRecord]:
+    """Scrape filtered regional inventory from the sreality API.
+
+    Runs two queries (apartments 3+kk+ and houses) with price cap,
+    then merges and deduplicates results.
+    Returns summary-level PropertyRecords (no individual detail enrichment).
+    """
+    location_params = {
+        "category_type_cb": 1,  # sale
+        "locality_region_id": region_id,
+        "locality_district_id": district_ids,
+        "czk_price_summary_order2": price_max,
+    }
+
+    # Query 1: apartments 3+kk and larger
+    logger.info("Scraping apartments (3+kk and larger, <=%d CZK)...", price_max)
+    apt_estates = _paginate_estates(
+        session,
+        {**location_params, "category_main_cb": 1, "category_sub_cb": APT_SUB_CBS},
+        per_page=per_page,
+        delay_range=delay_range,
+    )
+
+    # Query 2: all houses
+    logger.info("Scraping houses (<=%d CZK)...", price_max)
+    house_estates = _paginate_estates(
+        session,
+        {**location_params, "category_main_cb": 2},
+        per_page=per_page,
+        delay_range=delay_range,
+    )
+
+    # Deduplicate by hash_id (shouldn't overlap, but safe)
+    seen = set()
+    all_records = []
+    for estate in apt_estates + house_estates:
+        hid = estate.get("hash_id")
+        if hid in seen:
+            continue
+        seen.add(hid)
+        all_records.append(estate_summary_to_record(estate))
 
     logger.info("Sreality region scrape complete: %d records", len(all_records))
     return all_records
