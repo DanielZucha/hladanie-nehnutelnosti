@@ -413,16 +413,28 @@ def scrape_region_listings(
         delay_range=delay_range,
     )
 
-    # Deduplicate by hash_id (shouldn't overlap, but safe)
+    # Deduplicate by hash_id and enforce price cap client-side
+    # (the API's czk_price_summary_order2 doesn't catch all listings)
     seen = set()
     all_records = []
+    price_filtered = 0
     for estate in apt_estates + house_estates:
         hid = estate.get("hash_id")
         if hid in seen:
             continue
         seen.add(hid)
-        all_records.append(estate_summary_to_record(estate))
 
+        record = estate_summary_to_record(estate)
+
+        # Drop listings above price cap (but keep "price on request" = 1)
+        if record.price_total and record.price_total > 1 and record.price_total > price_max:
+            price_filtered += 1
+            continue
+
+        all_records.append(record)
+
+    if price_filtered:
+        logger.info("Dropped %d listings above %d CZK price cap", price_filtered, price_max)
     logger.info("Sreality region scrape complete: %d records", len(all_records))
     return all_records
 

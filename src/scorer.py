@@ -37,8 +37,12 @@ def score_price_attractiveness(
     Houses get a tolerance: their effective price is reduced by
     house_premium_tolerance (25%) before comparison.
     """
-    if price_per_sqm is None or price_total is None:
+    if price_total is None:
         return None
+
+    # "Price on request" (sreality uses price=1 as placeholder)
+    if price_total <= 1 or price_per_sqm is None:
+        return 50.0
 
     effective_price_per_sqm = price_per_sqm
     effective_price_total = price_total
