@@ -8,7 +8,7 @@ email:
     - "noreply@reality.idnes.cz"
     - "hlidac@ceskereality.cz"
   report_recipients: []  # overridden by REPORT_RECIPIENTS env var (comma-separated)
-  report_days: [0, 3]  # Monday=0, Thursday=3
+  report_days: [1, 4]  # Tuesday=1, Friday=4
   report_hour_cet: 9
 
 search:
