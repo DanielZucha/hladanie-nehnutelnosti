@@ -1,5 +1,6 @@
 """Configuration loader for home-searching pipeline."""
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -7,11 +8,11 @@ import yaml
 from pydantic import BaseModel, field_validator
 
 
-class GmailConfig(BaseModel):
-    credentials_file: str = "credentials.json"
-    token_file: str = "token.json"
+class EmailConfig(BaseModel):
+    address: str = ""
+    app_password: str = ""
     alert_senders: list[str] = []
-    report_recipient: str = ""
+    report_recipients: list[str] = []
     report_days: list[int] = [0, 3]
     report_hour_cet: int = 9
 
@@ -72,8 +73,7 @@ class EnricherConfig(BaseModel):
 
 
 class DriveConfig(BaseModel):
-    folder_name: str = "Home Search - Prague"
-    share_with: list[str] = []
+    remote_folder: str = "Home Search - Prague"
 
 
 class DataConfig(BaseModel):
@@ -83,7 +83,7 @@ class DataConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
-    gmail: GmailConfig = GmailConfig()
+    email: EmailConfig = EmailConfig()
     search: SearchConfig = SearchConfig()
     scoring: ScoringConfig = ScoringConfig()
     enricher: EnricherConfig = EnricherConfig()
@@ -92,7 +92,7 @@ class AppConfig(BaseModel):
 
 
 def load_config(path: str | Path = "config.yaml") -> AppConfig:
-    """Load configuration from YAML file."""
+    """Load configuration from YAML file, with env var overrides."""
     config_path = Path(path)
     if not config_path.exists():
         msg = f"Config file not found: {config_path}"
@@ -101,4 +101,13 @@ def load_config(path: str | Path = "config.yaml") -> AppConfig:
     with open(config_path) as f:
         raw: dict[str, Any] = yaml.safe_load(f)
 
-    return AppConfig(**raw)
+    config = AppConfig(**raw)
+
+    # Environment variable overrides (secrets stay out of config.yaml)
+    if addr := os.environ.get("EMAIL_ADDRESS"):
+        config.email.address = addr
+    if pw := os.environ.get("EMAIL_APP_PASSWORD"):
+        config.email.app_password = pw
+    if recip := os.environ.get("REPORT_RECIPIENTS"):
+        config.email.report_recipients = [r.strip() for r in recip.split(",")]
+    return config

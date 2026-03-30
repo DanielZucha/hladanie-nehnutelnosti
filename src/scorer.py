@@ -210,3 +210,53 @@ def identify_outliers(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
     scored["composite_score"] = pd.to_numeric(scored["composite_score"])
     scored = scored.sort_values("composite_score", ascending=False)
     return scored.head(top_n)
+
+
+def identify_categorized_picks(
+    df: pd.DataFrame,
+    per_category: int = 5,
+    top_composite_threshold: float = 85.0,
+) -> dict[str, pd.DataFrame]:
+    """Identify interesting properties in three categories.
+
+    Returns dict with keys:
+    - "top_composite": ALL listings scoring above top_composite_threshold
+    - "best_value": highest price_score (best deals per m2)
+    - "best_location": highest transit + greenery, regardless of price
+
+    Each category is deduplicated -- a listing appears only in its
+    highest-ranked category.
+    """
+    scored = df.copy()
+    for col in ["composite_score", "price_score", "transit_dim", "greenery_dim"]:
+        scored[col] = pd.to_numeric(scored.get(col, 0), errors="coerce")
+
+    scored = scored[scored["composite_score"].notna()]
+
+    # Location+greenery combined score
+    scored["location_combined"] = (
+        scored["transit_dim"].fillna(0) + scored["greenery_dim"].fillna(0)
+    ) / 2
+
+    seen_ids = set()
+    result = {}
+
+    # 1. Top composite -- all above threshold, no cap
+    top = scored[scored["composite_score"] >= top_composite_threshold]
+    top = top.sort_values("composite_score", ascending=False)
+    seen_ids.update(top["property_id"].tolist())
+    result["top_composite"] = top
+
+    # 2. Best value (price score)
+    val = scored.sort_values("price_score", ascending=False)
+    val = val[~val["property_id"].isin(seen_ids)].head(per_category)
+    seen_ids.update(val["property_id"].tolist())
+    result["best_value"] = val
+
+    # 3. Best location (transit + greenery combined, price > 100k to filter junk)
+    loc = scored[scored["price_score"].notna()]
+    loc = loc.sort_values("location_combined", ascending=False)
+    loc = loc[~loc["property_id"].isin(seen_ids)].head(per_category)
+    result["best_location"] = loc
+
+    return result

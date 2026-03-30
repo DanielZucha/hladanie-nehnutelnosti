@@ -5,15 +5,11 @@ description = "Property monitoring and analysis for Prague and Central Bohemia"
 requires-python = ">=3.11"
 
 dependencies = [
-    "google-api-python-client>=2.100",
-    "google-auth-oauthlib>=1.1",
-    "google-auth-httplib2>=0.2",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "pandas>=2.1",
     "requests>=2.31",
     "pydantic>=2.5",
-    "pydantic-settings>=2.1",
     "pyyaml>=6.0",
     "matplotlib>=3.8",
     "tenacity>=8.2",

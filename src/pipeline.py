@@ -4,34 +4,25 @@ import logging
 import sys
 import time
 import random
+from datetime import datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
 import requests
 
 from src.config import load_config
-from src.storage import (
-    read_master,
-    write_master,
-    deduplicate_and_merge,
-)
+from src.storage import read_master, write_master, deduplicate_and_merge
 from src.gmail_client import (
-    get_gmail_service,
     fetch_unread_alerts,
-    mark_as_read,
+    mark_batch_as_read,
     send_html_email,
 )
 from src.parsers import sreality, ceskereality, idnes
 from src.greenery import compute_final_greenery_score
 from src.transit import compute_transit_score
-from src.scorer import score_dataframe, identify_outliers
+from src.scorer import score_dataframe, identify_outliers, identify_categorized_picks
 from src.reporter import generate_report_html, generate_scatter_plot
-from src.drive_sync import (
-    get_drive_service,
-    find_or_create_folder,
-    share_folder,
-    upload_csv,
-    download_csv,
-)
+from src.drive_sync import ensure_remote_folder, download_csv, upload_csv
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,47 +35,58 @@ def run_parse(config_path: str = "config.yaml") -> None:
     """Fetch alert emails, parse, enrich, deduplicate, save."""
     config = load_config(config_path)
 
-    # Gmail: fetch unread alerts
-    gmail = get_gmail_service(config.gmail.credentials_file, config.gmail.token_file)
-    emails = fetch_unread_alerts(gmail, config.gmail.alert_senders)
+    emails = fetch_unread_alerts(
+        config.email.address,
+        config.email.app_password,
+        config.email.alert_senders,
+    )
 
     if not emails:
         logger.info("No new alert emails. Nothing to do.")
         return
 
-    # Parse emails by source
     session = requests.Session()
     session.headers.update({"User-Agent": config.enricher.user_agent})
     delay = tuple(config.enricher.request_delay_seconds)
 
     all_records = []
-    for email in emails:
-        sender = email["sender"].lower()
-        html = email["html_body"]
+    processed_uids = []
+
+    for em in emails:
+        sender = em["sender"].lower()
+        html = em["html_body"]
 
         if not html:
             logger.warning("Empty email body from %s, skipping", sender)
-            mark_as_read(gmail, email["message_id"])
+            processed_uids.append(em["uid"])
             continue
 
         records = []
         if "sreality" in sender:
-            parsed = sreality.parse_email_html(html)
-            records = sreality.enrich_from_email(parsed, session, delay)
+            records = sreality.process_email(html, session, delay)
         elif "ceskereality" in sender:
             parsed = ceskereality.parse_email_html(html)
             records = ceskereality.enrich_from_email(parsed, session, delay)
-        else:
-            # Visidoo or other third-party (idnes)
+        elif "idnes" in sender:
             parsed = idnes.parse_email_html(html)
-            records = idnes.enrich_from_email(parsed, session, delay)
+            records = idnes.email_listings_to_records(parsed, session, delay)
+        else:
+            logger.warning("Unknown sender: %s, skipping", sender)
+            continue
 
         logger.info(
             "Parsed %d listings from %s (%s)",
-            len(records), sender, email["subject"],
+            len(records), sender, em["subject"],
         )
         all_records.extend(records)
-        mark_as_read(gmail, email["message_id"])
+        processed_uids.append(em["uid"])
+
+    # Mark processed emails as read
+    mark_batch_as_read(
+        config.email.address,
+        config.email.app_password,
+        processed_uids,
+    )
 
     if not all_records:
         logger.info("No listings extracted from emails.")
@@ -148,89 +150,77 @@ def run_report(config_path: str = "config.yaml") -> None:
         logger.info("Master CSV is empty. No report to send.")
         return
 
-    # Score first
     scored = score_dataframe(df, config.scoring)
     write_master(scored, master_path)
 
-    # Identify outliers
-    outliers = identify_outliers(scored, top_n=10)
-    outlier_ids = set(outliers["property_id"].tolist())
+    picks = identify_categorized_picks(scored, per_category=5)
 
-    # Generate scatter plot
-    scatter_bytes = generate_scatter_plot(scored, outlier_ids)
+    # All picked IDs for scatter plot highlighting
+    all_pick_ids = set()
+    for cat_df in picks.values():
+        all_pick_ids.update(cat_df["property_id"].tolist())
 
-    # Count new listings (scraped in last 3 days)
-    import pandas as pd
-    from datetime import datetime, timedelta
+    scatter_bytes = generate_scatter_plot(scored, all_pick_ids)
+
     cutoff = (datetime.now() - timedelta(days=3)).isoformat()
     new_count = len(scored[scored["scrape_date"] >= cutoff[:10]])
 
-    # Generate HTML
     html = generate_report_html(
-        outliers=outliers,
+        categorized_picks=picks,
         total_count=len(scored),
         new_count=new_count,
     )
 
-    # Send
-    gmail = get_gmail_service(config.gmail.credentials_file, config.gmail.token_file)
     send_html_email(
-        service=gmail,
-        to=config.gmail.report_recipient,
-        subject=f"Property Report -- {datetime.now().strftime('%d %b %Y')}",
+        email_address=config.email.address,
+        app_password=config.email.app_password,
+        to=config.email.report_recipients,
+        subject=f"Přehled nemovitostí -- {datetime.now().strftime('%d. %m. %Y')}",
         html_body=html,
         inline_images={"scatter_plot": scatter_bytes},
     )
-    logger.info("Report sent to %s", config.gmail.report_recipient)
+    logger.info("Report sent to %s", config.email.report_recipients)
 
 
-def run_sync(config_path: str = "config.yaml") -> None:
-    """Sync master CSV to Google Drive."""
+def run_sync_up(config_path: str = "config.yaml") -> None:
+    """Upload master CSV to Google Drive via rclone."""
     config = load_config(config_path)
     master_path = Path(config.data.master_csv)
 
     if not master_path.exists():
-        logger.info("No master CSV to sync.")
+        logger.info("No master CSV to upload.")
         return
 
-    drive = get_drive_service(config.gmail.credentials_file, config.gmail.token_file)
-    folder_id = find_or_create_folder(drive, config.drive.folder_name)
-
-    # Share with configured emails (idempotent)
-    for email in config.drive.share_with:
-        share_folder(drive, folder_id, email)
-
-    upload_csv(drive, master_path, folder_id)
-    logger.info("Drive sync complete")
+    ensure_remote_folder(config.drive.remote_folder)
+    upload_csv(master_path, config.drive.remote_folder)
 
 
-def run_download(config_path: str = "config.yaml") -> None:
-    """Download master CSV from Google Drive (for GitHub Actions)."""
+def run_sync_down(config_path: str = "config.yaml") -> None:
+    """Download master CSV from Google Drive via rclone."""
     config = load_config(config_path)
     master_path = Path(config.data.master_csv)
 
-    drive = get_drive_service(config.gmail.credentials_file, config.gmail.token_file)
-    folder_id = find_or_create_folder(drive, config.drive.folder_name)
-    download_csv(drive, folder_id, master_path)
+    ensure_remote_folder(config.drive.remote_folder)
+    download_csv(config.drive.remote_folder, master_path)
 
 
 def run_daily(config_path: str = "config.yaml") -> None:
-    """Full daily pipeline: download -> parse -> score -> sync."""
+    """Full daily pipeline: pull CSV -> parse emails -> score -> push CSV."""
     logger.info("=== Daily pipeline start ===")
-    run_download(config_path)
+    run_sync_down(config_path)
     run_parse(config_path)
     run_score(config_path)
-    run_sync(config_path)
+    run_sync_up(config_path)
     logger.info("=== Daily pipeline complete ===")
 
 
 def run_report_all(config_path: str = "config.yaml") -> None:
-    """Full report pipeline: download -> parse -> score -> report -> sync."""
+    """Full report pipeline: pull CSV -> parse -> score -> report -> push CSV."""
     logger.info("=== Report pipeline start ===")
-    run_download(config_path)
+    run_sync_down(config_path)
     run_parse(config_path)
     run_report(config_path)
-    run_sync(config_path)
+    run_sync_up(config_path)
     logger.info("=== Report pipeline complete ===")
 
 
@@ -238,8 +228,8 @@ COMMANDS = {
     "parse": run_parse,
     "score": run_score,
     "report": run_report,
-    "sync": run_sync,
-    "download": run_download,
+    "sync-up": run_sync_up,
+    "sync-down": run_sync_down,
     "daily": run_daily,
     "report-all": run_report_all,
 }

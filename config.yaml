@@ -1,12 +1,13 @@
-gmail:
-  credentials_file: "credentials.json"
-  token_file: "token.json"
+email:
+  # Gmail with App Password (no Google Cloud needed)
+  # Set these in .env or as environment variables
+  address: ""  # overridden by EMAIL_ADDRESS env var
+  app_password: ""  # overridden by EMAIL_APP_PASSWORD env var
   alert_senders:
     - "info@sreality.cz"
-    - "no-reply@sreality.cz"
+    - "noreply@reality.idnes.cz"
     - "hlidac@ceskereality.cz"
-    - "alert@visidoo.com"
-  report_recipient: "CHANGEME@gmail.com"
+  report_recipients: []  # overridden by REPORT_RECIPIENTS env var (comma-separated)
   report_days: [0, 3]  # Monday=0, Thursday=3
   report_hour_cet: 9
 
@@ -83,9 +84,9 @@ enricher:
   user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 drive:
-  folder_name: "Home Search - Prague"
-  share_with: []
-  # - "wife@example.com"
+  # rclone remote folder name on Google Drive
+  # Setup: brew install rclone && rclone config (name remote "gdrive")
+  remote_folder: "Home Search - Prague"
 
 data:
   master_csv: "data/master.csv"

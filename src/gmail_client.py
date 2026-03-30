@@ -1,121 +1,116 @@
-"""Gmail API client for reading alert emails and sending reports."""
+"""Email client using IMAP (read) and SMTP (send) with Gmail App Passwords.
 
-import base64
+No Google Cloud Console needed. Just:
+1. Enable 2FA on the Gmail account
+2. Generate an App Password (Google Account > Security > App Passwords)
+3. Set EMAIL_ADDRESS and EMAIL_APP_PASSWORD in .env or config
+"""
+
+import email
+import imaplib
 import logging
+import smtplib
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.image import MIMEImage
-from pathlib import Path
 from typing import Optional
-
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
 
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.send",
-]
-
-
-def get_gmail_service(
-    credentials_file: str = "credentials.json",
-    token_file: str = "token.json",
-):
-    """Authenticate and return Gmail API service."""
-    creds = None
-    token_path = Path(token_file)
-
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(credentials_file, SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        token_path.write_text(creds.to_json())
-
-    return build("gmail", "v1", credentials=creds)
+IMAP_HOST = "imap.gmail.com"
+IMAP_PORT = 993
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
 
 
 def fetch_unread_alerts(
-    service,
+    email_address: str,
+    app_password: str,
     sender_addresses: list[str],
     max_results: int = 50,
 ) -> list[dict]:
-    """Fetch unread emails from specified senders.
+    """Fetch unread emails from specified senders via IMAP.
 
-    Returns list of dicts with: message_id, sender, subject, html_body, date.
+    Returns list of dicts with: uid, sender, subject, html_body, date.
     """
-    # Build OR query for senders
-    sender_query = " OR ".join(f"from:{addr}" for addr in sender_addresses)
-    query = f"is:unread ({sender_query})"
+    conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    conn.login(email_address, app_password)
+    conn.select("INBOX")
 
-    results = (
-        service.users()
-        .messages()
-        .list(userId="me", q=query, maxResults=max_results)
-        .execute()
-    )
+    all_messages = []
 
-    messages = results.get("messages", [])
-    if not messages:
-        logger.info("No unread alert emails found")
-        return []
+    for sender in sender_addresses:
+        criteria = f'(UNSEEN FROM "{sender}")'
+        status, data = conn.search(None, criteria)
 
-    parsed = []
-    for msg_meta in messages:
-        msg = (
-            service.users()
-            .messages()
-            .get(userId="me", id=msg_meta["id"], format="full")
-            .execute()
-        )
+        if status != "OK" or not data[0]:
+            continue
 
-        headers = {h["name"]: h["value"] for h in msg["payload"]["headers"]}
-        html_body = _extract_html_body(msg["payload"])
+        uids = data[0].split()
+        if len(uids) > max_results:
+            uids = uids[:max_results]
 
-        parsed.append({
-            "message_id": msg_meta["id"],
-            "sender": headers.get("From", ""),
-            "subject": headers.get("Subject", ""),
-            "html_body": html_body or "",
-            "date": headers.get("Date", ""),
-        })
+        for uid in uids:
+            status, msg_data = conn.fetch(uid, "(RFC822)")
+            if status != "OK":
+                continue
 
-    logger.info("Fetched %d unread alert emails", len(parsed))
-    return parsed
+            raw = msg_data[0][1]
+            msg = email.message_from_bytes(raw)
+
+            html_body = _extract_html_body(msg)
+
+            all_messages.append({
+                "uid": uid.decode(),
+                "sender": msg.get("From", ""),
+                "subject": msg.get("Subject", ""),
+                "html_body": html_body or "",
+                "date": msg.get("Date", ""),
+            })
+
+    conn.close()
+    conn.logout()
+
+    logger.info("Fetched %d unread alert emails", len(all_messages))
+    return all_messages
 
 
-def mark_as_read(service, message_id: str) -> None:
-    """Mark a message as read by removing UNREAD label."""
-    service.users().messages().modify(
-        userId="me",
-        id=message_id,
-        body={"removeLabelIds": ["UNREAD"]},
-    ).execute()
+def mark_batch_as_read(
+    email_address: str,
+    app_password: str,
+    uids: list[str],
+) -> None:
+    """Mark multiple messages as read in a single IMAP session."""
+    if not uids:
+        return
+
+    conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    conn.login(email_address, app_password)
+    conn.select("INBOX")
+
+    for uid in uids:
+        conn.store(uid.encode(), "+FLAGS", "\\Seen")
+
+    conn.close()
+    conn.logout()
 
 
 def send_html_email(
-    service,
-    to: str,
+    email_address: str,
+    app_password: str,
+    to: list[str],
     subject: str,
     html_body: str,
     inline_images: Optional[dict[str, bytes]] = None,
 ) -> None:
-    """Send an HTML email, optionally with inline images.
+    """Send an HTML email via SMTP, optionally with inline images.
 
+    to: list of recipient email addresses.
     inline_images: dict mapping Content-ID to PNG bytes.
     """
     msg = MIMEMultipart("related")
-    msg["To"] = to
+    msg["From"] = email_address
+    msg["To"] = ", ".join(to)
     msg["Subject"] = subject
 
     html_part = MIMEText(html_body, "html", "utf-8")
@@ -128,25 +123,28 @@ def send_html_email(
             img.add_header("Content-Disposition", "inline", filename=f"{cid}.png")
             msg.attach(img)
 
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    service.users().messages().send(
-        userId="me",
-        body={"raw": raw},
-    ).execute()
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(email_address, app_password)
+        server.send_message(msg)
 
-    logger.info("Report email sent to %s", to)
+    logger.info("Report email sent to %s", ", ".join(to))
 
 
-def _extract_html_body(payload: dict) -> Optional[str]:
-    """Recursively extract HTML body from Gmail message payload."""
-    if payload.get("mimeType") == "text/html":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-
-    for part in payload.get("parts", []):
-        result = _extract_html_body(part)
-        if result:
-            return result
+def _extract_html_body(msg: email.message.Message) -> Optional[str]:
+    """Extract HTML body from an email message."""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/html":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    charset = part.get_content_charset() or "utf-8"
+                    return payload.decode(charset, errors="replace")
+    else:
+        if msg.get_content_type() == "text/html":
+            payload = msg.get_payload(decode=True)
+            if payload:
+                charset = msg.get_content_charset() or "utf-8"
+                return payload.decode(charset, errors="replace")
 
     return None

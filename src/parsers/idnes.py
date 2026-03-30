@@ -1,4 +1,14 @@
-"""Reality.idnes.cz parser: Visidoo/third-party alert emails + page enrichment."""
+"""Reality.idnes.cz parser: native 'hlidaci pes' email alerts + page enrichment.
+
+iDNES alert emails contain rich listing data directly:
+- Property type and size (e.g., "domu 235 m2 s pozemkem 878 m2")
+- Price in CZK
+- Location with district
+- Direct detail links
+
+Format: each listing is a table block with pattern:
+  Prodej | domu X m2 s pozemkem Y m2 | PRICE Kč | Location, District | link
+"""
 
 import logging
 import re
@@ -12,8 +22,6 @@ from bs4 import BeautifulSoup
 
 from src.parsers._shared import (
     detect_greenery_from_text,
-    parse_size_category,
-    parse_size_sqm,
     normalize_price,
 )
 from src.storage import PropertyRecord, generate_property_id
@@ -22,32 +30,79 @@ logger = logging.getLogger(__name__)
 
 
 def parse_email_html(html: str) -> list[dict]:
-    """Extract listing links from a Visidoo or third-party alert email.
+    """Extract listings from an iDNES hlidaci pes alert email.
 
-    These emails typically contain links to reality.idnes.cz listing pages.
-    The exact format depends on the alert service used.
+    Returns list of dicts with: url, size_sqm, plot_sqm, price, location,
+    property_type, size_text.
     """
     soup = BeautifulSoup(html, "lxml")
     listings = []
 
+    # Find all links to detail pages
     for link in soup.find_all("a", href=True):
         href = link["href"]
-        if "reality.idnes.cz" not in href and "idnes.cz/detail" not in href:
+        if "reality.idnes.cz/detail/" not in href:
             continue
 
-        parent = link.find_parent(["tr", "div", "td"])
-        context_text = parent.get_text(separator=" ", strip=True) if parent else ""
+        # The link is deeply nested. Walk up to find the table.row
+        # that contains the full listing text (price, size, location).
+        block = link.find_parent("table", class_="row")
+        if not block:
+            # Fallback: walk up through multiple parent tables
+            for parent_table in link.parents:
+                if parent_table.name == "table":
+                    text = parent_table.get_text(strip=True)
+                    if "Kč" in text and "m²" in text:
+                        block = parent_table
+                        break
+        if not block:
+            continue
 
-        price_match = re.search(r"([\d\s.,]+)\s*Kč", context_text)
+        block_text = block.get_text(separator=" | ", strip=True)
+
+        # Extract price: "9 499 000 Kč"
+        price_match = re.search(r"([\d\s]+)\s*Kč", block_text)
         price = normalize_price(price_match.group(1)) if price_match else None
 
+        # Extract size: "domu 235 m²" or "bytu 75 m²"
+        size_match = re.search(r"(\d+)\s*m[²2]", block_text)
+        size_sqm = float(size_match.group(1)) if size_match else None
+
+        # Extract plot size: "s pozemkem 878 m²"
+        plot_match = re.search(r"pozemkem\s+(\d+)\s*m[²2]", block_text)
+        plot_sqm = float(plot_match.group(1)) if plot_match else None
+
+        # Extract location: last meaningful segment before "Zobrazit"
+        # Pattern: "Nová, Veltruby, okres Kolín"
+        loc_match = re.search(
+            r"Kč\s*\|\s*(.+?)\s*\|\s*Zobrazit", block_text
+        )
+        location = loc_match.group(1).strip() if loc_match else ""
+
+        # Property type from URL or text
+        if "/dum/" in href or "domu" in block_text.lower():
+            prop_type = "house"
+        elif "/byt/" in href or "bytu" in block_text.lower():
+            prop_type = "apartment"
+        else:
+            prop_type = ""
+
+        # Size category from text: "bytu 3+kk" or similar
+        cat_match = re.search(r"(\d\+(?:kk|1|KK))", block_text, re.IGNORECASE)
+        size_category = cat_match.group(1).lower() if cat_match else ""
+
         listings.append({
-            "url": href,
-            "name": link.get_text(strip=True),
+            "url": href.split("?")[0],  # strip UTM params
             "price": price,
-            "context": context_text,
+            "size_sqm": size_sqm,
+            "plot_sqm": plot_sqm,
+            "location": location,
+            "property_type": prop_type,
+            "size_category": size_category,
+            "block_text": block_text,
         })
 
+    # Deduplicate by URL
     seen = set()
     unique = []
     for item in listings:
@@ -61,11 +116,10 @@ def parse_email_html(html: str) -> list[dict]:
 def enrich_from_page(
     url: str,
     session: requests.Session,
-) -> Optional[PropertyRecord]:
-    """Fetch an idnes reality listing page and extract data.
+) -> Optional[dict]:
+    """Fetch an iDNES listing page for additional fields.
 
-    Note: reality.idnes.cz is server-rendered ASP.NET, so requests + BS4 works.
-    The site uses BotStopper, so enrichment may fail on some requests.
+    Returns dict with extra fields or None on failure.
     """
     try:
         resp = session.get(url, timeout=15)
@@ -75,110 +129,105 @@ def enrich_from_page(
         return None
 
     soup = BeautifulSoup(resp.text, "lxml")
-    now = datetime.now().isoformat()
-    today = date.today().isoformat()
-
-    title = soup.find("h1") or soup.find(class_=re.compile(r"title|nadpis", re.I))
-    name = title.get_text(strip=True) if title else ""
-
-    # Price extraction
-    price = None
-    price_el = soup.find(class_=re.compile(r"price|cena", re.I))
-    if price_el:
-        price = normalize_price(price_el.get_text())
-
-    # Location
-    location = ""
-    loc_el = soup.find(class_=re.compile(r"location|lokalita|adresa", re.I))
-    if loc_el:
-        location = loc_el.get_text(strip=True)
-
-    # Full page text for greenery detection
     page_text = soup.get_text(separator=" ")
+
     greenery_type, greenery_score = detect_greenery_from_text(page_text)
 
-    size_sqm = parse_size_sqm(name) or parse_size_sqm(page_text[:500])
-    size_cat = parse_size_category(name)
+    # Try to extract energy rating
+    energy = ""
+    energy_match = re.search(r"PENB[:\s]*([A-G])", page_text, re.IGNORECASE)
+    if energy_match:
+        energy = energy_match.group(1).upper()
 
-    price_per_sqm = None
-    if price and size_sqm and size_sqm > 0:
-        price_per_sqm = round(price / size_sqm, 2)
-
-    return PropertyRecord(
-        property_id=generate_property_id("idnes", url),
-        source="idnes",
-        url=url,
-        property_type=_infer_type(name),
-        size_category=size_cat or "",
-        size_sqm=size_sqm,
-        garden_present=greenery_type in ("private_garden", "shared_garden"),
-        greenery_score=greenery_score,
-        greenery_source=f"keyword:{greenery_type}" if greenery_score > 0 else "",
-        price_total=price,
-        price_per_sqm=price_per_sqm,
-        location=location,
-        district=_extract_district(location),
-        energy_efficiency_rating="",
-        scrape_date=today,
-        last_updated=now,
-        enrichment_status="done",
-    )
+    return {
+        "greenery_type": greenery_type,
+        "greenery_score": greenery_score,
+        "energy_rating": energy,
+    }
 
 
-def enrich_from_email(
+def email_listings_to_records(
     email_listings: list[dict],
     session: requests.Session,
     delay_range: tuple[float, float] = (2.0, 4.0),
 ) -> list[PropertyRecord]:
-    """Take parsed email listings, enrich via page visit, return PropertyRecords."""
+    """Convert parsed email listings to PropertyRecords, enriching via page visit."""
     records = []
+    now = datetime.now().isoformat()
+    today = date.today().isoformat()
 
     for item in email_listings:
         url = item["url"]
-        record = enrich_from_page(url, session)
+        pid = generate_property_id("idnes", url)
 
-        if record:
-            records.append(record)
+        price = item.get("price")
+        size_sqm = item.get("size_sqm")
+        price_per_sqm = None
+        if price and size_sqm and size_sqm > 0:
+            price_per_sqm = round(price / size_sqm, 2)
+
+        # Extract district from location like "Nová, Veltruby, okres Kolín"
+        location = item.get("location", "")
+        district = _extract_district(location)
+
+        # Default greenery from email text
+        greenery_type, greenery_score = detect_greenery_from_text(
+            item.get("block_text", "")
+        )
+
+        # Houses with plot > 0 likely have a garden
+        if item.get("property_type") == "house" and item.get("plot_sqm", 0):
+            if greenery_score < 95:
+                greenery_type = "private_garden"
+                greenery_score = 95
+
+        # Enrich from page visit
+        enrichment_status = "done"
+        energy_rating = ""
+        extra = enrich_from_page(url, session)
+        if extra:
+            if extra["greenery_score"] > greenery_score:
+                greenery_score = extra["greenery_score"]
+                greenery_type = extra["greenery_type"]
+            energy_rating = extra.get("energy_rating", "")
         else:
-            records.append(_minimal_record_from_email(item))
+            enrichment_status = "partial"
+
+        records.append(PropertyRecord(
+            property_id=pid,
+            source="idnes",
+            url=url,
+            property_type=item.get("property_type", ""),
+            size_category=item.get("size_category", ""),
+            size_sqm=size_sqm,
+            garden_present=greenery_type in ("private_garden", "shared_garden"),
+            greenery_score=greenery_score,
+            greenery_source=f"keyword:{greenery_type}" if greenery_score > 0 else "",
+            price_total=price,
+            price_per_sqm=price_per_sqm,
+            location=location,
+            district=district,
+            energy_efficiency_rating=energy_rating,
+            scrape_date=today,
+            last_updated=now,
+            enrichment_status=enrichment_status,
+        ))
 
         time.sleep(random.uniform(*delay_range))
 
     return records
 
 
-def _infer_type(name: str) -> str:
-    name_lower = name.lower()
-    if "dům" in name_lower or "dum" in name_lower or "rodinný" in name_lower:
-        return "house"
-    return "apartment"
-
-
 def _extract_district(location: str) -> str:
+    """Extract district from location like 'Nová, Veltruby, okres Kolín'."""
     match = re.search(r"(Praha\s*\d+)", location)
     if match:
         return match.group(1)
+    # "okres X" pattern
+    okres_match = re.search(r"okres\s+([^,]+)", location)
+    if okres_match:
+        return okres_match.group(1).strip()
     parts = [p.strip() for p in location.split(",")]
     if parts:
-        return parts[-1].split("-")[0].strip()
+        return parts[-1].strip()
     return ""
-
-
-def _minimal_record_from_email(item: dict) -> PropertyRecord:
-    url = item.get("url", "")
-    now = datetime.now().isoformat()
-    today = date.today().isoformat()
-    name = item.get("name", "")
-
-    return PropertyRecord(
-        property_id=generate_property_id("idnes", url),
-        source="idnes",
-        url=url,
-        size_category=parse_size_category(name) or "",
-        size_sqm=parse_size_sqm(name),
-        price_total=item.get("price"),
-        location=item.get("context", ""),
-        scrape_date=today,
-        last_updated=now,
-        enrichment_status="failed",
-    )

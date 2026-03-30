@@ -99,6 +99,9 @@ def deduplicate_and_merge(
     new_rows = [record_to_dict(r) for r in new_records]
     new_df = pd.DataFrame(new_rows, columns=SCHEMA_COLUMNS)
 
+    # Deduplicate within the new batch itself
+    new_df = new_df.drop_duplicates(subset=["property_id"], keep="last")
+
     if existing.empty:
         return new_df, len(new_df), 0
 
