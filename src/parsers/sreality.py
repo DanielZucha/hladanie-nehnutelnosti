@@ -314,10 +314,26 @@ def process_email(
 _SEO_TYPE = {1: "prodej", 2: "pronajem"}
 _SEO_MAIN = {1: "byt", 2: "dum", 3: "pozemek", 4: "komercni", 5: "ostatni"}
 _SEO_SUB = {
+    # Byty (apartments)
     2: "1+kk", 3: "1+1", 4: "2+kk", 5: "2+1",
     6: "3+kk", 7: "3+1", 8: "4+kk", 9: "4+1",
     10: "5+kk", 11: "5+1", 12: "6-a-vice", 16: "atypicky",
-    37: "rodinny", 39: "vila",
+    # Domy (houses)
+    33: "chata", 34: "pamatka", 35: "na-klic",
+    37: "rodinny", 38: "cinzovni-dum", 39: "vila",
+    43: "chalupa", 44: "zemedelska-usedlost",
+    47: "rodinny", 52: "projekt",
+    54: "vicegeneracni",
+    # Pozemky (land)
+    18: "bydleni", 19: "komercni", 20: "pole",
+    21: "lesy", 22: "rybnik", 23: "sady-vinice",
+    24: "zahrada", 46: "ostatni-pozemky",
+    # Komercni (commercial)
+    25: "kancelare", 26: "sklady", 27: "vyrobni-prostory",
+    28: "obchodni-prostory", 29: "ubytovani",
+    30: "restaurace", 31: "zemedelsky-objekt",
+    32: "cinzovni-dum", 36: "virtualni-kancelar",
+    40: "ordinace", 49: "ostatni-komercni-prostory",
 }
 
 
@@ -325,18 +341,22 @@ def _build_detail_url(hash_id: str, seo: dict) -> str:
     """Build a working sreality.cz detail URL from SEO data.
 
     URL pattern: /detail/prodej/byt/3+kk/praha-vinohrady/2184995660
+    Requires exactly 4 path segments after /detail/ to avoid 404.
     """
     type_str = _SEO_TYPE.get(seo.get("category_type_cb", 1), "prodej")
     main_str = _SEO_MAIN.get(seo.get("category_main_cb", 1), "byt")
-    sub_str = _SEO_SUB.get(seo.get("category_sub_cb", 0), "")
+    sub_cb = seo.get("category_sub_cb", 0)
+    sub_str = _SEO_SUB.get(sub_cb, "")
     locality_str = seo.get("locality", "")
 
-    if sub_str and locality_str:
-        return f"{SREALITY_WEB_BASE}/detail/{type_str}/{main_str}/{sub_str}/{locality_str}/{hash_id}"
-    elif locality_str:
-        return f"{SREALITY_WEB_BASE}/detail/{type_str}/{main_str}/{locality_str}/{hash_id}"
-    else:
-        return f"{SREALITY_WEB_BASE}/detail/{type_str}/{main_str}/{hash_id}"
+    if not sub_str:
+        logger.warning("Unknown category_sub_cb=%s for hash_id=%s, using 'x'", sub_cb, hash_id)
+        sub_str = "x"
+
+    if not locality_str:
+        locality_str = "x"
+
+    return f"{SREALITY_WEB_BASE}/detail/{type_str}/{main_str}/{sub_str}/{locality_str}/{hash_id}"
 
 
 def _extract_district(locality: str) -> str:
