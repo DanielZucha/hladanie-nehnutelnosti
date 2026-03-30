@@ -1,0 +1,93 @@
+gmail:
+  credentials_file: "credentials.json"
+  token_file: "token.json"
+  alert_senders:
+    - "info@sreality.cz"
+    - "no-reply@sreality.cz"
+    - "hlidac@ceskereality.cz"
+    - "alert@visidoo.com"
+  report_recipient: "CHANGEME@gmail.com"
+  report_days: [0, 3]  # Monday=0, Thursday=3
+  report_hour_cet: 9
+
+search:
+  regions:
+    - "Praha"
+    - "Stredocesky kraj"
+  min_rooms: 3
+  property_types:
+    - "apartment"
+    - "house"
+
+scoring:
+  weights:
+    price_attractiveness: 0.35
+    greenery: 0.25
+    transit: 0.20
+    room_count: 0.10
+    property_type: 0.10
+  price_cap_czk: 12000000
+  price_penalty_per_million_over: 10  # -10 points per 1M above cap
+  house_premium_tolerance: 0.25  # willing to pay 25% more for houses
+
+  room_scores:
+    "5+kk": 100
+    "5+1": 100
+    "4+kk": 100
+    "4+1": 100
+    "3+1": 70
+    "3+kk": 60
+
+  type_scores:
+    house_any: 100
+    apartment_with_garden: 70
+    apartment_without_garden: 40
+
+  transit:
+    prague_score: 100
+    train_within_3km: 100
+    train_within_6km: 50
+    no_train: 0
+
+  greenery:
+    private_garden: 95
+    shared_garden: 65
+    park_within_200m: 50
+    terrace_balcony: 25
+    nothing_detected: 0
+    osm_search_radius_m: 300
+
+  location_scores:
+    # Prague districts -- adjust as you learn preferences
+    "Praha 1": 60
+    "Praha 2": 75
+    "Praha 3": 80
+    "Praha 4": 75
+    "Praha 5": 80
+    "Praha 6": 85
+    "Praha 7": 70
+    "Praha 8": 65
+    "Praha 9": 60
+    "Praha 10": 70
+    # Central Bohemia east -- examples, extend as needed
+    "Ricany": 70
+    "Cesky Brod": 55
+    "Benesov": 45
+    "Kolin": 50
+    "Kutna Hora": 45
+    "Brandys nad Labem": 60
+
+enricher:
+  request_delay_seconds: [2, 4]
+  max_retries: 1
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+drive:
+  folder_name: "Home Search - Prague"
+  share_with: []
+  # - "wife@example.com"
+
+data:
+  master_csv: "data/master.csv"
+  price_history_csv: "data/price_history.csv"
+  failed_parses_dir: "data/failed_parses"

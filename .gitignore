@@ -1,0 +1,26 @@
+# Secrets
+credentials.json
+token.json
+*.env
+.env
+
+# Data (synced via Google Drive, not git)
+data/master.csv
+data/price_history.csv
+data/failed_parses/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

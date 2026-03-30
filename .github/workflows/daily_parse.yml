@@ -1,0 +1,45 @@
+name: Daily Property Parse
+
+on:
+  schedule:
+    # 7:00 UTC = 8:00 CET / 9:00 CEST
+    - cron: '0 7 * * *'
+  workflow_dispatch:  # manual trigger
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install .
+
+      - name: Write Google credentials
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+        run: |
+          echo "$GOOGLE_CREDENTIALS_JSON" > credentials.json
+          echo "$GOOGLE_TOKEN_JSON" > token.json
+
+      - name: Run daily pipeline
+        run: python -m src.pipeline daily
+
+      - name: Upload token (may have been refreshed)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f token.json ]; then
+            # Store refreshed token back as secret via gh CLI
+            # Note: this requires a PAT with secrets scope, not GITHUB_TOKEN
+            echo "Token file exists. If refresh happened, update GOOGLE_TOKEN_JSON secret manually or via API."
+          fi
