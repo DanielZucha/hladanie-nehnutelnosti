@@ -80,6 +80,8 @@ def parse_email_html(html: str) -> list[dict]:
 def fetch_saved_search_listings(
     search_id: str,
     session: requests.Session,
+    region_id: int = 10,
+    district_ids: str = "56|51|55",
     max_pages: int = 3,
     per_page: int = 20,
 ) -> list[dict]:
@@ -87,6 +89,8 @@ def fetch_saved_search_listings(
 
     The saved search page is a React SPA, but we can query the API directly.
     We try the estates endpoint with pagination to get recent listings.
+    Region/district IDs are passed as belt-and-suspenders filter alongside
+    the watchdog param (which alone does not filter results).
     """
     all_estates = []
 
@@ -94,6 +98,8 @@ def fetch_saved_search_listings(
         url = f"{SREALITY_API_BASE}/estates"
         params = {
             "category_type_cb": 1,  # sale
+            "locality_region_id": region_id,
+            "locality_district_id": district_ids,
             "per_page": per_page,
             "page": page,
             "watchdog": search_id,
@@ -276,6 +282,8 @@ def enrich_record_with_detail(
 def process_email(
     html: str,
     session: requests.Session,
+    region_id: int = 10,
+    district_ids: str = "56|51|55",
     delay_range: tuple[float, float] = (2.0, 4.0),
     enrich_details: bool = False,
 ) -> list[PropertyRecord]:
@@ -298,6 +306,8 @@ def process_email(
 
         estates = fetch_saved_search_listings(
             search["search_id"], session,
+            region_id=region_id,
+            district_ids=district_ids,
         )
 
         for estate in estates:
@@ -308,6 +318,124 @@ def process_email(
             all_records.append(record)
 
     logger.info("Total sreality records from email: %d", len(all_records))
+    return all_records
+
+
+def _paginate_estates(
+    session: requests.Session,
+    params: dict,
+    per_page: int = 500,
+    delay_range: tuple[float, float] = (1.0, 2.0),
+) -> list[dict]:
+    """Paginate through sreality estates endpoint with given filter params."""
+    all_estates = []
+    page = 1
+    params = {**params, "per_page": per_page}
+
+    while True:
+        params["page"] = page
+        try:
+            resp = session.get(
+                f"{SREALITY_API_BASE}/estates", params=params, timeout=30,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "Sreality API returned %d on page %d, stopping",
+                    resp.status_code, page,
+                )
+                break
+
+            data = resp.json()
+            estates = data.get("_embedded", {}).get("estates", [])
+            if not estates:
+                break
+
+            all_estates.extend(estates)
+            result_size = data.get("result_size", 0)
+            logger.info(
+                "Sreality scrape page %d: %d estates (total so far: %d / %d)",
+                page, len(estates), len(all_estates), result_size,
+            )
+
+            if len(all_estates) >= result_size:
+                break
+
+        except requests.RequestException:
+            logger.warning("Failed to fetch sreality API page %d", page)
+            break
+
+        page += 1
+        time.sleep(random.uniform(*delay_range))
+
+    return all_estates
+
+
+# Sreality API category_sub_cb values for apartment sizes 3+kk and larger
+APT_SUB_CBS = "6|7|8|9|10|11|12|16"  # 3+kk,3+1,4+kk,4+1,5+kk,5+1,6+,atypicky
+
+
+def scrape_region_listings(
+    session: requests.Session,
+    region_id: int = 10,
+    district_ids: str = "56|51|55",
+    price_max: int = 17_000_000,
+    per_page: int = 500,
+    delay_range: tuple[float, float] = (1.0, 2.0),
+) -> list[PropertyRecord]:
+    """Scrape filtered regional inventory from the sreality API.
+
+    Runs two queries (apartments 3+kk+ and houses) with price cap,
+    then merges and deduplicates results.
+    Returns summary-level PropertyRecords (no individual detail enrichment).
+    """
+    location_params = {
+        "category_type_cb": 1,  # sale
+        "locality_region_id": region_id,
+        "locality_district_id": district_ids,
+        "czk_price_summary_order2": price_max,
+    }
+
+    # Query 1: apartments 3+kk and larger
+    logger.info("Scraping apartments (3+kk and larger, <=%d CZK)...", price_max)
+    apt_estates = _paginate_estates(
+        session,
+        {**location_params, "category_main_cb": 1, "category_sub_cb": APT_SUB_CBS},
+        per_page=per_page,
+        delay_range=delay_range,
+    )
+
+    # Query 2: all houses
+    logger.info("Scraping houses (<=%d CZK)...", price_max)
+    house_estates = _paginate_estates(
+        session,
+        {**location_params, "category_main_cb": 2},
+        per_page=per_page,
+        delay_range=delay_range,
+    )
+
+    # Deduplicate by hash_id and enforce price cap client-side
+    # (the API's czk_price_summary_order2 doesn't catch all listings)
+    seen = set()
+    all_records = []
+    price_filtered = 0
+    for estate in apt_estates + house_estates:
+        hid = estate.get("hash_id")
+        if hid in seen:
+            continue
+        seen.add(hid)
+
+        record = estate_summary_to_record(estate)
+
+        # Drop listings above price cap (but keep "price on request" = 1)
+        if record.price_total and record.price_total > 1 and record.price_total > price_max:
+            price_filtered += 1
+            continue
+
+        all_records.append(record)
+
+    if price_filtered:
+        logger.info("Dropped %d listings above %d CZK price cap", price_filtered, price_max)
+    logger.info("Sreality region scrape complete: %d records", len(all_records))
     return all_records
 
 
