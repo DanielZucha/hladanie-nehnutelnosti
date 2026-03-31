@@ -116,12 +116,12 @@ def deduplicate_and_merge(
             # Check price change
             old_row = existing.loc[existing["property_id"] == pid].iloc[0]
             if str(row["price_total"]) != str(old_row["price_total"]):
-                existing.loc[existing["property_id"] == pid, "price_total"] = row[
-                    "price_total"
-                ]
-                existing.loc[existing["property_id"] == pid, "last_updated"] = row[
-                    "last_updated"
-                ]
+                existing.loc[existing["property_id"] == pid, "price_total"] = str(
+                    row["price_total"]
+                )
+                existing.loc[existing["property_id"] == pid, "last_updated"] = str(
+                    row["last_updated"]
+                )
                 updated_count += 1
         else:
             rows_to_append.append(row)
