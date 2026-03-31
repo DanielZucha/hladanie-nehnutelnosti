@@ -221,47 +221,11 @@ def run_scrape(config_path: str = "config.yaml") -> None:
         logger.info("All scraped listings filtered out by region filter.")
         return
 
-    # Enrich with OSM data (greenery + transit) -- only for NEW records,
-    # capped to avoid overwhelming the Overpass API on large scrapes.
+    # No OSM enrichment for bulk scrape -- Overpass API can't handle the volume
+    # and the 15-min GH Actions timeout. Keyword-based greenery + Praha heuristic
+    # transit scoring are sufficient. Email-parsed listings still get OSM in run_parse.
     master_path = config.data.master_csv
     existing = read_master(master_path)
-    existing_ids = set(existing["property_id"].tolist()) if not existing.empty else set()
-
-    osm_enrichment_cap = 100  # max new records to OSM-enrich per run
-    enriched_count = 0
-    skipped_count = 0
-    for rec in all_records:
-        if rec.property_id in existing_ids:
-            continue
-        if not (rec.lat and rec.lon):
-            continue
-        if enriched_count >= osm_enrichment_cap:
-            skipped_count += 1
-            continue
-
-        green_score, green_source = compute_final_greenery_score(
-            keyword_score=rec.greenery_score or 0,
-            keyword_source=rec.greenery_source,
-            lat=rec.lat,
-            lon=rec.lon,
-            osm_radius_m=config.scoring.greenery.osm_search_radius_m,
-        )
-        rec.greenery_score = green_score
-        rec.greenery_source = green_source
-
-        transit_score, dist_km = compute_transit_score(
-            rec.lat, rec.lon, rec.district, rec.location,
-        )
-        rec.distance_to_train_km = dist_km
-        enriched_count += 1
-
-        # Rate limit OSM queries
-        time.sleep(random.uniform(1.0, 2.0))
-
-    logger.info(
-        "OSM-enriched %d new records (%d deferred to next run)",
-        enriched_count, skipped_count,
-    )
 
     # Merge into master
     merged, new_count, updated_count = deduplicate_and_merge(existing, all_records)
