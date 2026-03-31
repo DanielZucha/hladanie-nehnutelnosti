@@ -413,30 +413,76 @@ def scrape_region_listings(
         delay_range=delay_range,
     )
 
-    # Deduplicate by hash_id and enforce price cap client-side
-    # (the API's czk_price_summary_order2 doesn't catch all listings)
+    all_records = _dedup_and_filter(apt_estates + house_estates, price_max)
+    logger.info("Sreality region scrape complete: %d records", len(all_records))
+    return all_records
+
+
+def scrape_new_listings(
+    session: requests.Session,
+    region_id: int = 10,
+    district_ids: str = "56|51|55",
+    price_max: int = 17_000_000,
+    delay_range: tuple[float, float] = (1.0, 2.0),
+) -> list[PropertyRecord]:
+    """Scrape only new daily arrivals from the sreality API.
+
+    Uses estate_age=2 to get listings added since last check (~35-50/day).
+    Suitable for daily cron runs.
+    """
+    location_params = {
+        "category_type_cb": 1,
+        "locality_region_id": region_id,
+        "locality_district_id": district_ids,
+        "czk_price_summary_order2": price_max,
+        "estate_age": 2,
+    }
+
+    logger.info("Scraping new apartments (3+kk and larger, <=%d CZK)...", price_max)
+    apt_estates = _paginate_estates(
+        session,
+        {**location_params, "category_main_cb": 1, "category_sub_cb": APT_SUB_CBS},
+        per_page=100,
+        delay_range=delay_range,
+    )
+
+    logger.info("Scraping new houses (<=%d CZK)...", price_max)
+    house_estates = _paginate_estates(
+        session,
+        {**location_params, "category_main_cb": 2},
+        per_page=100,
+        delay_range=delay_range,
+    )
+
+    all_records = _dedup_and_filter(apt_estates + house_estates, price_max)
+    logger.info("Sreality new arrivals: %d records", len(all_records))
+    return all_records
+
+
+def _dedup_and_filter(
+    estates: list[dict], price_max: int,
+) -> list[PropertyRecord]:
+    """Deduplicate by hash_id and enforce client-side price cap."""
     seen = set()
-    all_records = []
+    records = []
     price_filtered = 0
-    for estate in apt_estates + house_estates:
+
+    for estate in estates:
         hid = estate.get("hash_id")
         if hid in seen:
             continue
         seen.add(hid)
 
         record = estate_summary_to_record(estate)
-
-        # Drop listings above price cap (but keep "price on request" = 1)
         if record.price_total and record.price_total > 1 and record.price_total > price_max:
             price_filtered += 1
             continue
 
-        all_records.append(record)
+        records.append(record)
 
     if price_filtered:
         logger.info("Dropped %d listings above %d CZK price cap", price_filtered, price_max)
-    logger.info("Sreality region scrape complete: %d records", len(all_records))
-    return all_records
+    return records
 
 
 _SEO_TYPE = {1: "prodej", 2: "pronajem"}
