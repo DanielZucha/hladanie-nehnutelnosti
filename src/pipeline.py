@@ -64,12 +64,8 @@ def run_parse(config_path: str = "config.yaml") -> None:
 
         records = []
         if "sreality" in sender:
-            records = sreality.process_email(
-                html, session,
-                region_id=config.search.sreality_region_id,
-                district_ids=config.search.sreality_district_ids,
-                delay_range=delay,
-            )
+            # Skip: sreality listings are covered by daily API scrape
+            logger.info("Skipping sreality email (covered by API scrape)")
         elif "ceskereality" in sender:
             parsed = ceskereality.parse_email_html(html)
             records = ceskereality.enrich_from_email(parsed, session, delay)
@@ -196,13 +192,77 @@ def run_report(config_path: str = "config.yaml") -> None:
 
 
 def run_scrape(config_path: str = "config.yaml") -> None:
-    """Scrape full regional inventory from sreality API, enrich, deduplicate, save."""
+    """Scrape new sreality arrivals, OSM-enrich, deduplicate, save."""
     config = load_config(config_path)
 
     session = requests.Session()
     session.headers.update({"User-Agent": config.enricher.user_agent})
 
-    logger.info("Starting sreality region scrape...")
+    logger.info("Scraping new sreality arrivals...")
+    all_records = sreality.scrape_new_listings(
+        session,
+        region_id=config.search.sreality_region_id,
+        district_ids=config.search.sreality_district_ids,
+        price_max=config.search.price_max_czk,
+    )
+
+    if not all_records:
+        logger.info("No new sreality listings today.")
+        return
+
+    all_records = filter_records(all_records)
+
+    if not all_records:
+        logger.info("All new listings filtered out by region filter.")
+        return
+
+    # OSM enrich all new arrivals (~35-50/day, well within Overpass limits)
+    master_path = config.data.master_csv
+    existing = read_master(master_path)
+    existing_ids = set(existing["property_id"].tolist()) if not existing.empty else set()
+
+    enriched_count = 0
+    for rec in all_records:
+        if rec.property_id in existing_ids:
+            continue
+        if rec.lat and rec.lon:
+            green_score, green_source = compute_final_greenery_score(
+                keyword_score=rec.greenery_score or 0,
+                keyword_source=rec.greenery_source,
+                lat=rec.lat,
+                lon=rec.lon,
+                osm_radius_m=config.scoring.greenery.osm_search_radius_m,
+            )
+            rec.greenery_score = green_score
+            rec.greenery_source = green_source
+
+            transit_score, dist_km = compute_transit_score(
+                rec.lat, rec.lon, rec.district, rec.location,
+            )
+            rec.distance_to_train_km = dist_km
+            enriched_count += 1
+
+            time.sleep(random.uniform(1.0, 2.0))
+
+    logger.info("OSM-enriched %d new sreality records", enriched_count)
+
+    merged, new_count, updated_count = deduplicate_and_merge(existing, all_records)
+    write_master(merged, master_path)
+
+    logger.info(
+        "Scrape merge: %d new, %d price-updated, %d total",
+        new_count, updated_count, len(merged),
+    )
+
+
+def run_scrape_full(config_path: str = "config.yaml") -> None:
+    """One-time full regional inventory scrape. No OSM enrichment."""
+    config = load_config(config_path)
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": config.enricher.user_agent})
+
+    logger.info("Starting full sreality region scrape...")
     all_records = sreality.scrape_region_listings(
         session,
         region_id=config.search.sreality_region_id,
@@ -214,25 +274,17 @@ def run_scrape(config_path: str = "config.yaml") -> None:
         logger.info("No listings from region scrape.")
         return
 
-    # Safety net: drop anything outside target regions
     all_records = filter_records(all_records)
-
     if not all_records:
-        logger.info("All scraped listings filtered out by region filter.")
         return
 
-    # No OSM enrichment for bulk scrape -- Overpass API can't handle the volume
-    # and the 15-min GH Actions timeout. Keyword-based greenery + Praha heuristic
-    # transit scoring are sufficient. Email-parsed listings still get OSM in run_parse.
     master_path = config.data.master_csv
     existing = read_master(master_path)
-
-    # Merge into master
     merged, new_count, updated_count = deduplicate_and_merge(existing, all_records)
     write_master(merged, master_path)
 
     logger.info(
-        "Scrape merge: %d new, %d price-updated, %d total",
+        "Full scrape: %d new, %d price-updated, %d total",
         new_count, updated_count, len(merged),
     )
 
@@ -284,6 +336,7 @@ def run_report_all(config_path: str = "config.yaml") -> None:
 COMMANDS = {
     "parse": run_parse,
     "scrape": run_scrape,
+    "scrape-full": run_scrape_full,
     "score": run_score,
     "report": run_report,
     "sync-up": run_sync_up,
