@@ -162,22 +162,29 @@ def run_report(config_path: str = "config.yaml") -> None:
     scored = score_dataframe(df, config.scoring)
     write_master(scored, master_path)
 
-    picks = identify_categorized_picks(scored, per_category=5)
+    # Report only on new arrivals since last report.
+    # Reports run Tue + Fri, so the window is 3-4 days.
+    # Use 4 days to ensure no gap between Fri->Tue.
+    cutoff = (datetime.now() - timedelta(days=4)).strftime("%Y-%m-%d")
+    new_listings = scored[scored["scrape_date"] >= cutoff]
 
-    # All picked IDs for scatter plot highlighting
+    if new_listings.empty:
+        logger.info("No new listings since last report. Skipping.")
+        return
+
+    picks = identify_categorized_picks(new_listings, per_category=5)
+
+    # Scatter plot: new arrivals highlighted against full dataset
     all_pick_ids = set()
     for cat_df in picks.values():
         all_pick_ids.update(cat_df["property_id"].tolist())
 
     scatter_bytes = generate_scatter_plot(scored, all_pick_ids)
 
-    cutoff = (datetime.now() - timedelta(days=3)).isoformat()
-    new_count = len(scored[scored["scrape_date"] >= cutoff[:10]])
-
     html = generate_report_html(
         categorized_picks=picks,
         total_count=len(scored),
-        new_count=new_count,
+        new_count=len(new_listings),
     )
 
     send_html_email(
