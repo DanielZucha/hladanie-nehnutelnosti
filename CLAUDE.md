@@ -14,7 +14,7 @@ Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 - **Repo**: DanielZucha/hladanie-nehnutelnosti, branch: `devel`
 
 ## Data Sources
-- **sreality.cz**: Email alerts + daily full-region scrape via JSON API `/api/cs/v2/estates`
+- **sreality.cz**: Daily new-arrivals scrape via JSON API (`estate_age=2`, ~50/day). Background dataset from one-time full scrape.
 - **reality.idnes.cz**: Native "hlidaci pes" alerts, listings parsed from email HTML
 - **ceskereality.cz**: Parser written, awaiting alert registration
 
@@ -29,17 +29,17 @@ Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 
 House premium tolerance: 25% (effective price reduced before scoring).
 
-## Report Categories (email reports)
-- Red dot: Top 10 by composite score (P95 percentile threshold)
+## Report Categories (email reports -- new arrivals only)
+- Red dot: Top 10 by composite score
 - Green dot: Top 5 best price/m2
 - Blue dot: Top 5 best location + greenery
 
 ## Active Goals
-- [ ] Merge feature/region-filter -> devel, monitor first automated daily run
+- [x] Region filter + sreality API scrape (merged to devel, CI passing)
 - [ ] Register ceskereality.cz alerts on throwaway account
 - [ ] Tune location_scores in config.yaml based on viewing feedback
 - [ ] Monitor parser stability as portal email formats change
-- [ ] Improve OSM enrichment throughput (batch queries or local Overpass instance)
+- [ ] Verify first automated cron run fires (daily 7:00 UTC)
 
 ## Key Files
 | File | Purpose |
@@ -62,14 +62,14 @@ House premium tolerance: 25% (effective price reduced before scoring).
 - Deployed to GitHub Actions, all workflows passing
 - Next: Register ceskereality alerts, tune scoring after first week of data
 
-### 2026-03-31: Region filter, full-region scrape, market analysis
-- Discovered sreality `watchdog` param doesn't filter API results -- was pulling 68k nationwide listings
+### 2026-03-31: Region filter, sreality scrape, market analysis, architecture refactor
+- Discovered sreality `watchdog` param doesn't filter API results -- was pulling 68k nationwide
 - Added region filter (text + GPS bbox) for Praha + Praha-východ/Kolín/Nymburk
-- Added `scrape_region_listings()`: 2 targeted API queries (apts 3+kk+, houses, <=17M), ~4,200 listings in 36s
-- Sreality API price filter unreliable -- 1,292 listings above cap slipped through; added client-side enforcement
-- Price-on-request (price=1, n=296) now scored at 50 instead of None (was inflating composite via weight redistribution)
-- Built peer-group market analysis (apt/house x prague/region) with z-scores; PDF with clickable links uploaded to Drive
-- Fixed email report: switched from absolute threshold (85) to P95 percentile + cap of 10
-- OSM Overpass can't handle bulk enrichment (~1 req/min under load); capped at 100 new records per run
-- Seeded master CSV with 2,872 scored listings, uploaded to Drive
-- Next: merge feature/region-filter to devel, monitor first automated daily run, tune scoring after viewings
+- One-time full scrape seeded 2,872 listings as background dataset (on Drive)
+- Peer-group market analysis (apt/house x prague/region) with z-scores; PDF on Drive
+- Refactored daily flow: sreality new arrivals via `estate_age=2` (~50/day) + iDNES/ceske emails
+- OSM enrichment runs on new arrivals only (feasible at ~50/day, ~2 min)
+- Email reports now filter to new arrivals since last report; fixed 10 red + 5 green + 5 blue picks
+- Price-on-request scored at 50; client-side price cap enforcement (API filter unreliable)
+- CI passing at 1m17s. Pandas dtype fix for str/int assignment in deduplicate_and_merge
+- Next: verify first cron run, tune scoring after viewings
