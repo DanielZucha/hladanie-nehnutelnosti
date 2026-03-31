@@ -218,16 +218,15 @@ def identify_outliers(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
 
 def identify_categorized_picks(
     df: pd.DataFrame,
+    top_n: int = 10,
     per_category: int = 5,
-    top_composite_max: int = 10,
-    top_composite_percentile: float = 95.0,
 ) -> dict[str, pd.DataFrame]:
     """Identify interesting properties in three categories.
 
     Returns dict with keys:
-    - "top_composite": top percentile listings, capped at top_composite_max
-    - "best_value": highest price_score (best deals per m2)
-    - "best_location": highest transit + greenery, regardless of price
+    - "top_composite": top N by composite score
+    - "best_value": top per_category by price score (cheapest per m2)
+    - "best_location": top per_category by transit + greenery
 
     Each listing appears in at most one category (highest priority first).
     """
@@ -237,7 +236,6 @@ def identify_categorized_picks(
 
     scored = scored[scored["composite_score"].notna()]
 
-    # Location+greenery combined score
     scored["location_combined"] = (
         scored["transit_dim"].fillna(0) + scored["greenery_dim"].fillna(0)
     ) / 2
@@ -245,10 +243,8 @@ def identify_categorized_picks(
     seen_ids = set()
     result = {}
 
-    # 1. Top composite -- above P95 (or P85 for small sets), capped
-    threshold = scored["composite_score"].quantile(top_composite_percentile / 100)
-    top = scored[scored["composite_score"] >= threshold]
-    top = top.sort_values("composite_score", ascending=False).head(top_composite_max)
+    # 1. Top composite -- fixed top N
+    top = scored.sort_values("composite_score", ascending=False).head(top_n)
     seen_ids.update(top["property_id"].tolist())
     result["top_composite"] = top
 
