@@ -59,3 +59,9 @@
 - **Decision**: Filter to `scrape_date` within last 4 days (covers Tue->Fri and Fri->Tue gaps). Fixed top-10 composite + 5 best value + 5 best location. Scatter plot still shows full dataset for context.
 - **Alternatives**: Percentile-based threshold (inconsistent count), report on everything (noise).
 - **Outcome**: Every report shows exactly 20 new listings across 3 categories.
+
+### 2026-11-25: Restart with narrowed rules, sreality v1, offline stations
+- **Context**: Cron workflows were disabled after 60 days without commits (last run 2026-06-02). Sreality `/api/cs/v2` now returns 404; robots.txt disallows all bots ("neplecha ukončena"). Search narrowed to Praha + Praha-východ belt up to Úvaly/Nehvizdy; train required outside Prague; greenery dropped.
+- **Decision**: (1) One rule function (`region_filter.passes_rules`) for every source: 79+ m2, 3+kk+, 6-14M (price on request kept), not panel, Praha or corridor box with station <= 4 km. (2) Sreality via `/api/v1/estates/search` with server-side filters, full filtered inventory each run (~10 requests), first-seen date marks "new"; any non-JSON answer fails the run loudly. (3) iDNES kept: detail page gives wall type + area, Nominatim (geopy) gives GPS, a committed OSM station snapshot (`src/stations.json`) gives train distance -- public Overpass mirrors timed out. (4) Weights 45/25/15/15; blue section = largest area. (5) New `master_v2.csv`; old master left on Drive. (6) keepalive-workflow job in both workflows.
+- **Alternatives**: Drop sreality (robots.txt) -- user chose low-volume API use; corridor as buffer around rail line -- user capped distance at Úvaly/Nehvizdy, so a box is enough; live Overpass per listing -- unreliable.
+- **Outcome**: Dry run 2026-11-25: 775 sreality listings -> 524 pass (~420 Praha, ~90 corridor). Škvorec excluded by name after a viewing: ~3 km to Úvaly station on the map, bus-only in practice (`search.exclude_towns`).

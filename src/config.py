@@ -17,13 +17,26 @@ class EmailConfig(BaseModel):
     report_hour_cet: int = 9
 
 
+class CorridorBox(BaseModel):
+    lat_min: float = 50.03
+    lat_max: float = 50.17
+    lon_min: float = 14.55
+    lon_max: float = 14.77
+
+
 class SearchConfig(BaseModel):
-    regions: list[str] = ["Praha", "Praha-východ", "Kolín", "Nymburk"]
-    sreality_region_id: int = 10
-    sreality_district_ids: str = "56|51|55"
-    price_max_czk: int = 17_000_000
+    sreality_region_id: int = 10  # Praha
+    sreality_district_ids: str = "56"  # Praha-východ
+    apartment_sub_cbs: str = "6,7,8,9,10,11,12"  # 3+kk .. 6+
+    house_sub_cbs: str = "37,39,54"  # rodinný, vila, vícegenerační
+    building_types: str = "1,2,3,4,6,7,8"  # all except 5 = panelová
+    price_min_czk: int = 6_000_000
+    price_max_czk: int = 14_000_000
+    min_area_sqm: float = 79
     min_rooms: int = 3
-    property_types: list[str] = ["apartment", "house"]
+    corridor: CorridorBox = CorridorBox()
+    train_max_km: float = 4.0
+    exclude_towns: list[str] = ["Škvorec"]  # station near in a straight line, but bus-only in practice
 
 
 class TransitConfig(BaseModel):
@@ -33,22 +46,12 @@ class TransitConfig(BaseModel):
     no_train: int = 0
 
 
-class GreeneryConfig(BaseModel):
-    private_garden: int = 95
-    shared_garden: int = 65
-    park_within_200m: int = 50
-    terrace_balcony: int = 25
-    nothing_detected: int = 0
-    osm_search_radius_m: int = 300
-
-
 class ScoringConfig(BaseModel):
     weights: dict[str, float] = {
-        "price_attractiveness": 0.35,
-        "greenery": 0.25,
-        "transit": 0.20,
-        "room_count": 0.10,
-        "property_type": 0.10,
+        "price_attractiveness": 0.45,
+        "transit": 0.25,
+        "room_count": 0.15,
+        "property_type": 0.15,
     }
     price_cap_czk: int = 12_000_000
     price_penalty_per_million_over: int = 10
@@ -56,8 +59,6 @@ class ScoringConfig(BaseModel):
     room_scores: dict[str, int] = {}
     type_scores: dict[str, int] = {}
     transit: TransitConfig = TransitConfig()
-    greenery: GreeneryConfig = GreeneryConfig()
-    location_scores: dict[str, int] = {}
 
     @field_validator("weights")
     @classmethod
@@ -80,7 +81,7 @@ class DriveConfig(BaseModel):
 
 
 class DataConfig(BaseModel):
-    master_csv: str = "data/master.csv"
+    master_csv: str = "data/master_v2.csv"
     price_history_csv: str = "data/price_history.csv"
     failed_parses_dir: str = "data/failed_parses"
 

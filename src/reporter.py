@@ -32,19 +32,18 @@ def _cz_date(dt: datetime) -> str:
 
 
 def generate_scatter_plot(df: pd.DataFrame, outlier_ids: set[str]) -> bytes:
-    """Generate 2D scatter plot: X=price efficiency, Y=greenery+transit.
+    """Generate 2D scatter plot: X=price efficiency, Y=usable area.
 
     Returns PNG bytes.
     """
     plot_df = df.copy()
     plot_df["composite_score"] = pd.to_numeric(plot_df["composite_score"], errors="coerce")
     plot_df["price_score"] = pd.to_numeric(plot_df.get("price_score", 0), errors="coerce")
-    plot_df["greenery_dim"] = pd.to_numeric(plot_df.get("greenery_dim", 0), errors="coerce")
-    plot_df["transit_dim"] = pd.to_numeric(plot_df.get("transit_dim", 0), errors="coerce")
+    plot_df["size_sqm"] = pd.to_numeric(plot_df["size_sqm"], errors="coerce")
     plot_df = plot_df.dropna(subset=["price_score"])
 
     x = plot_df["price_score"].fillna(0)
-    y = (plot_df["greenery_dim"].fillna(0) + plot_df["transit_dim"].fillna(0)) / 2
+    y = plot_df["size_sqm"].fillna(0)
 
     is_outlier = plot_df["property_id"].isin(outlier_ids)
 
@@ -60,11 +59,10 @@ def generate_scatter_plot(df: pd.DataFrame, outlier_ids: set[str]) -> bytes:
     )
 
     ax.set_xlabel("Cenová výhodnost (vyšší = levnější za m²)", fontsize=11)
-    ax.set_ylabel("Zeleň + dopravní dostupnost", fontsize=11)
+    ax.set_ylabel("Užitná plocha (m²)", fontsize=11)
     ax.set_title("Přehled nemovitostí", fontsize=13)
     ax.legend(loc="upper left")
     ax.set_xlim(-5, 105)
-    ax.set_ylim(-5, 105)
     ax.grid(True, alpha=0.3)
 
     buf = io.BytesIO()
@@ -78,6 +76,7 @@ def generate_report_html(
     categorized_picks: dict[str, "pd.DataFrame"],
     total_count: int,
     new_count: int,
+    weights: dict[str, float],
     scatter_cid: str = "scatter_plot",
 ) -> str:
     """Generate HTML report email body in Czech with categorized picks."""
@@ -87,17 +86,17 @@ def generate_report_html(
         "top_composite": {
             "title": "Nejlepší celkové skóre",
             "color": "#ef4444",
-            "description": "Všechny nabídky se skóre nad 85 -- nejlepší kombinace ceny, zeleně, dostupnosti a dispozice.",
+            "description": "Nejlepší kombinace ceny, dostupnosti, dispozice a typu nemovitosti.",
         },
         "best_value": {
             "title": "Cenově nejvýhodnější",
             "color": "#22c55e",
             "description": "Nejnižší cena za m² -- stojí za prozkoumání.",
         },
-        "best_location": {
-            "title": "Nejlepší lokalita",
+        "largest": {
+            "title": "Největší plocha",
             "color": "#3b82f6",
-            "description": "Nejlepší doprava a zeleň -- i za vyšší cenu.",
+            "description": "Nejvíc metrů čtverečních v cenovém rozpětí.",
         },
     }
 
@@ -182,14 +181,25 @@ def generate_report_html(
 
         <hr style="margin-top: 20px; border: none; border-top: 1px solid #e2e8f0;" />
         <p style="font-size: 0.85em; color: #94a3b8;">
-            Generováno automaticky. Skóre zohledňuje: cenovou výhodnost (35 %),
-            zeleň (25 %), dopravní dostupnost do Prahy (20 %), počet pokojů (10 %),
-            typ nemovitosti (10 %).
+            Generováno automaticky. Skóre zohledňuje: {_weights_text(weights)}.
         </p>
     </body>
     </html>
     """
     return html
+
+
+_CZ_WEIGHTS = {
+    "price_attractiveness": "cenovou výhodnost",
+    "transit": "dopravní dostupnost do Prahy",
+    "room_count": "počet pokojů",
+    "property_type": "typ nemovitosti",
+}
+
+
+def _weights_text(weights: dict[str, float]) -> str:
+    """'cenovou výhodnost (45 %), ...' from the configured weights."""
+    return ", ".join(f"{_CZ_WEIGHTS.get(k, k)} ({round(v * 100)} %)" for k, v in weights.items())
 
 
 def _format_price(val) -> str:
@@ -218,12 +228,10 @@ def _generate_comment(row: pd.Series) -> str:
     except (ValueError, TypeError):
         pass
 
-    greenery = row.get("greenery_dim") or row.get("greenery_score")
     try:
-        if float(greenery) >= 80:
-            parts.append("skvělá zeleň")
-        elif float(greenery) >= 50:
-            parts.append("park v blízkosti")
+        train_km = float(row.get("distance_to_train_km"))
+        if train_km > 0:
+            parts.append(f"vlak {train_km:.1f} km")
     except (ValueError, TypeError):
         pass
 

@@ -1,9 +1,11 @@
 # Home Search -- Prague Property Monitor
 
 ## Overview
-Autonomous property monitoring pipeline for Prague + Central Bohemia east
-(okres Praha-východ, Kolín, Nymburk). Two data flows: email alerts for new-deal
-notifications, and daily full-region scrape from sreality API for market context.
+Autonomous property monitoring pipeline for Prague + the Praha-východ belt up to
+Úvaly/Nehvizdy (on the way to Pardubice). Two sources: sreality v1 search API
+(full filtered inventory daily) and iDNES "hlídací pes" emails to the throwaway
+inbox (secret `EMAIL_ADDRESS`). Hard rules in `config.yaml` `search:`: 79+ m2,
+apartment or house, 3+kk+, 6-14M CZK, not panel, train <= 4 km outside Prague.
 Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 
 ## Tech Stack
@@ -11,44 +13,44 @@ Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 - **Email**: IMAP/SMTP with Gmail App Passwords (no GCP)
 - **Drive sync**: rclone with built-in OAuth (remote: `hladanie-nehnutelnosti`)
 - **Scheduling**: GitHub Actions (daily parse + Tue/Fri reports)
-- **Repo**: DanielZucha/hladanie-nehnutelnosti, branch: `devel`
+- **Repo**: DanielZucha/hladanie-nehnutelnosti, default branch: `main` (renamed from `devel` 2026-11-25)
 
 ## Data Sources
-- **sreality.cz**: Daily new-arrivals scrape via JSON API (`estate_age=2`, ~50/day). Background dataset from one-time full scrape.
-- **reality.idnes.cz**: Native "hlidaci pes" alerts, listings parsed from email HTML
+- **sreality.cz**: `/api/v1/estates/search` with server-side filters (v2 is 404 since 2026). robots.txt disallows bots: keep volume low.
+- **reality.idnes.cz**: "hlídací pes" alerts; edit via the "přehled všech psů" link in an alert email (no login). Detail page -> wall type/area; Nominatim -> GPS; `src/stations.json` -> train distance
 - **ceskereality.cz**: Parser written, awaiting alert registration
 
-## Scoring Model (weights sum to 1.0)
+## Scoring Model (weights in config.yaml, sum to 1.0)
 | Dimension | Weight | Notes |
 |-----------|--------|-------|
-| Price attractiveness | 35% | Inverse price/sqm + penalty per 1M above 12M CZK cap |
-| Greenery | 25% | Keywords + OSM park proximity (300m radius) |
-| Transit | 20% | Prague=100, non-Prague: train <3km=100, <6km=50, else=0 |
-| Room count | 10% | 4+=100, 3+1=70, 3+kk=60 |
-| Property type | 10% | House=100, apt w/ garden=70, apt w/o=40 |
+| Price attractiveness | 45% | Inverse price/sqm + penalty per 1M above 12M CZK |
+| Transit | 25% | Prague=100, else station <3km=100, <=4km=50 |
+| Room count | 15% | 4+=100, 3+1=70, 3+kk=60 |
+| Property type | 15% | House=100, apt w/ garden=70, apt w/o=40 |
 
 House premium tolerance: 25% (effective price reduced before scoring).
 
-## Report Categories (email reports -- new arrivals only)
+## Report Categories (email reports -- new arrivals only, Tue + Fri)
 - Red dot: Top 10 by composite score
 - Green dot: Top 5 best price/m2
-- Blue dot: Top 5 best location + greenery
+- Blue dot: Top 5 largest usable area
 
 ## Active Goals
-- [x] Region filter + sreality API scrape (merged to devel, CI passing)
+- [x] Restart with narrowed rules (2026-11-25)
+- [ ] Update iDNES hlídací pes criteria to the new rules
+- [ ] Verify first Tue/Fri report after restart
 - [ ] Register ceskereality.cz alerts on throwaway account
-- [ ] Tune location_scores in config.yaml based on viewing feedback
-- [ ] Monitor parser stability as portal email formats change
-- [ ] Verify first automated cron run fires (daily 7:00 UTC)
 
 ## Key Files
 | File | Purpose |
 |------|---------|
 | `config.yaml` | All tuneable parameters (weights, thresholds, senders) |
 | `src/pipeline.py` | Entry points: daily, report-all, parse, scrape, score |
-| `src/parsers/sreality.py` | Sreality JSON API: email parsing + region scrape |
-| `src/parsers/idnes.py` | iDNES email HTML parser |
-| `src/region_filter.py` | Text + GPS bbox filter for target regions |
+| `src/parsers/sreality.py` | Sreality v1 search API client |
+| `src/parsers/idnes.py` | iDNES email + detail page parser |
+| `src/region_filter.py` | Hard rules for every source (region, train, size, price, walls) |
+| `src/locate.py` | Geocode + train distance for email listings |
+| `src/transit.py` + `src/stations.json` | Offline nearest-station lookup (OSM snapshot) |
 | `src/scorer.py` | Weighted scoring + categorized picks |
 | `src/reporter.py` | Czech HTML report + scatter plot |
 | `src/market_analysis.py` | One-time peer-group z-score analysis (not in daily flow) |
@@ -73,3 +75,9 @@ House premium tolerance: 25% (effective price reduced before scoring).
 - Price-on-request scored at 50; client-side price cap enforcement (API filter unreliable)
 - CI passing at 1m17s. Pandas dtype fix for str/int assignment in deduplicate_and_merge
 - Next: verify first cron run, tune scoring after viewings
+
+### 2026-11-25: Restart with narrowed search
+- Workflows had been disabled for inactivity since 2026-06; added keepalive job
+- Sreality v2 API gone -> ported to v1; greenery dropped; corridor Praha -> Úvaly/Nehvizdy
+- iDNES kept via detail page + Nominatim + offline station list (Overpass unreliable)
+- New master_v2.csv; first report covers the whole current filtered inventory

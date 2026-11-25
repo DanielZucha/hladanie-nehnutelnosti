@@ -1,11 +1,10 @@
-"""Weighted property scoring with outlier detection.
+"""Weighted property scoring; weights live in config.yaml.
 
 Scoring dimensions:
-- Price attractiveness (35%): inverse price/sqm + absolute cap penalty
-- Greenery (25%): combined keyword + OSM score
-- Transit (20%): Prague=100, else by train proximity
-- Room count (10%): 4+ preferred
-- Property type (10%): house > apt with garden > apt without
+- Price attractiveness: inverse price/sqm + absolute cap penalty
+- Transit: Prague=100, else by train proximity
+- Room count: 4+ preferred
+- Property type: house > apt with garden > apt without
 
 Null handling: if a dimension is null, redistribute its weight proportionally.
 """
@@ -17,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import ScoringConfig
+from src.region_filter import is_prague
 
 logger = logging.getLogger(__name__)
 
@@ -125,16 +125,29 @@ def compute_composite_score(
     return round(score, 1)
 
 
+def _transit_score(location: str, district: str, dist_km, config: ScoringConfig) -> Optional[float]:
+    """Prague scores full; elsewhere by straight-line distance to the nearest station."""
+    if is_prague(location, district):
+        return float(config.transit.prague_score)
+    if dist_km is None or pd.isna(dist_km):
+        return None
+    if dist_km <= 3.0:
+        return float(config.transit.train_within_3km)
+    if dist_km <= 6.0:
+        return float(config.transit.train_within_6km)
+    return float(config.transit.no_train)
+
+
 def score_dataframe(df: pd.DataFrame, config: ScoringConfig) -> pd.DataFrame:
     """Score all properties in the DataFrame.
 
-    Adds/updates columns: price_score, greenery_dim, transit_dim,
+    Adds/updates columns: price_score, transit_dim,
     room_dim, type_dim, composite_score.
     """
     df = df.copy()
 
     # Convert numeric columns
-    for col in ["price_total", "price_per_sqm", "greenery_score", "size_sqm"]:
+    for col in ["price_total", "price_per_sqm", "size_sqm", "distance_to_train_km"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df["garden_present"] = df["garden_present"].map(
@@ -153,23 +166,10 @@ def score_dataframe(df: pd.DataFrame, config: ScoringConfig) -> pd.DataFrame:
             config=config,
         )
 
-        greenery_s = row["greenery_score"] if pd.notna(row.get("greenery_score")) else None
-
-        # Transit: use pre-computed score if available, else None
-        transit_s = None
-        dist_train = row.get("distance_to_train_km")
-        district = str(row.get("district", ""))
-        location = str(row.get("location", ""))
-        if "praha" in f"{district} {location}".lower():
-            transit_s = float(config.transit.prague_score)
-        elif pd.notna(dist_train) and dist_train != "":
-            dist = float(dist_train)
-            if dist <= 3.0:
-                transit_s = float(config.transit.train_within_3km)
-            elif dist <= 6.0:
-                transit_s = float(config.transit.train_within_6km)
-            else:
-                transit_s = float(config.transit.no_train)
+        transit_s = _transit_score(
+            str(row.get("location", "")), str(row.get("district", "")),
+            row.get("distance_to_train_km"), config,
+        )
 
         room_s = score_room_count(str(row.get("size_category", "")), config)
 
@@ -181,7 +181,6 @@ def score_dataframe(df: pd.DataFrame, config: ScoringConfig) -> pd.DataFrame:
 
         dims = {
             "price_attractiveness": price_s,
-            "greenery": greenery_s,
             "transit": transit_s,
             "room_count": room_s,
             "property_type": type_s,
@@ -191,7 +190,6 @@ def score_dataframe(df: pd.DataFrame, config: ScoringConfig) -> pd.DataFrame:
 
         scores.append({
             "price_score": price_s,
-            "greenery_dim": greenery_s,
             "transit_dim": transit_s,
             "room_dim": room_s,
             "type_dim": type_s,
@@ -221,43 +219,25 @@ def identify_categorized_picks(
     top_n: int = 10,
     per_category: int = 5,
 ) -> dict[str, pd.DataFrame]:
-    """Identify interesting properties in three categories.
+    """Pick listings for the three report sections; each listing appears once.
 
-    Returns dict with keys:
     - "top_composite": top N by composite score
     - "best_value": top per_category by price score (cheapest per m2)
-    - "best_location": top per_category by transit + greenery
-
-    Each listing appears in at most one category (highest priority first).
+    - "largest": top per_category by usable area
     """
     scored = df.copy()
-    for col in ["composite_score", "price_score", "transit_dim", "greenery_dim"]:
-        scored[col] = pd.to_numeric(scored.get(col, 0), errors="coerce")
-
+    for col in ["composite_score", "price_score", "size_sqm"]:
+        scored[col] = pd.to_numeric(scored[col], errors="coerce") if col in scored else pd.Series(dtype=float)
     scored = scored[scored["composite_score"].notna()]
+    # Same property posted by several agents differs only in URL/ID.
+    scored = scored.drop_duplicates(subset=["location", "price_total", "size_sqm"])
 
-    scored["location_combined"] = (
-        scored["transit_dim"].fillna(0) + scored["greenery_dim"].fillna(0)
-    ) / 2
-
-    seen_ids = set()
-    result = {}
-
-    # 1. Top composite -- fixed top N
     top = scored.sort_values("composite_score", ascending=False).head(top_n)
-    seen_ids.update(top["property_id"].tolist())
-    result["top_composite"] = top
+    seen = set(top["property_id"])
 
-    # 2. Best value (price score)
-    val = scored.sort_values("price_score", ascending=False)
-    val = val[~val["property_id"].isin(seen_ids)].head(per_category)
-    seen_ids.update(val["property_id"].tolist())
-    result["best_value"] = val
+    val = scored[~scored["property_id"].isin(seen)].sort_values("price_score", ascending=False).head(per_category)
+    seen.update(val["property_id"])
 
-    # 3. Best location (transit + greenery combined)
-    loc = scored[scored["price_score"].notna()]
-    loc = loc.sort_values("location_combined", ascending=False)
-    loc = loc[~loc["property_id"].isin(seen_ids)].head(per_category)
-    result["best_location"] = loc
+    big = scored[~scored["property_id"].isin(seen)].sort_values("size_sqm", ascending=False).head(per_category)
 
-    return result
+    return {"top_composite": top, "best_value": val, "largest": big}
