@@ -13,7 +13,7 @@ Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 - **Email**: IMAP/SMTP with Gmail App Passwords (no GCP)
 - **Drive sync**: rclone with built-in OAuth (remote: `hladanie-nehnutelnosti`)
 - **Scheduling**: GitHub Actions (daily parse + Tue/Fri reports)
-- **Repo**: DanielZucha/hladanie-nehnutelnosti, branch: `devel`
+- **Repo**: DanielZucha/hladanie-nehnutelnosti, default branch: `main` (renamed from `devel` 2026-11-25)
 
 ## Data Sources
 - **sreality.cz**: `/api/v1/estates/search` with server-side filters (v2 is 404 since 2026). robots.txt disallows bots: keep volume low.
