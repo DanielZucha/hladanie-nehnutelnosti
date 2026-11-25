@@ -50,6 +50,8 @@ def _fail_reason(rec: PropertyRecord, cfg: SearchConfig) -> str:
     location = (rec.location or "").casefold()
     if any(town.casefold() in location for town in cfg.exclude_towns):
         return "excluded_town"
+    if rec.lat is None or rec.lon is None:
+        return "no_coords"  # geocoding failed; kept apart from "region" to tell the two apart
     if not _in_corridor(rec.lat, rec.lon, cfg):
         return "region"
     if rec.distance_to_train_km is None or rec.distance_to_train_km > cfg.train_max_km:
@@ -62,11 +64,15 @@ def passes_rules(rec: PropertyRecord, cfg: SearchConfig) -> bool:
     return _fail_reason(rec, cfg) == ""
 
 
-def filter_records(records: list[PropertyRecord], cfg: SearchConfig) -> list[PropertyRecord]:
-    """Keep records passing all hard rules; log drop counts per rule."""
+def filter_records(
+    records: list[PropertyRecord], cfg: SearchConfig, log_drops: bool = False,
+) -> list[PropertyRecord]:
+    """Keep records passing all hard rules; log drop counts, and with log_drops each location drop."""
     kept, dropped = [], {}
     for rec in records:
         reason = _fail_reason(rec, cfg)
+        if reason and log_drops and reason in ("region", "no_coords"):
+            logger.info("Dropped %s: %s (%s, %s)", reason, rec.location, rec.lat, rec.lon)
         if reason:
             dropped[reason] = dropped.get(reason, 0) + 1
         else:

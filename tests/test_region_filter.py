@@ -135,3 +135,30 @@ class TestFilterRecords:
     def test_one_kept_one_dropped(self):
         kept = filter_records([_rec(url="a"), _rec(url="b", size_sqm=50.0)], CFG)
         assert [r.url for r in kept] == ["a"]
+
+
+class TestDropDiagnostics:
+    def test_missing_coordinates_has_own_reason(self, caplog):
+        caplog.set_level("INFO")
+        filter_records([_uvaly(lat=None, lon=None)], CFG)
+        assert "'no_coords': 1" in caplog.text
+
+    def test_outside_box_is_region(self, caplog):
+        caplog.set_level("INFO")
+        filter_records([_uvaly(location="Beroun", lat=49.96, lon=14.07)], CFG)
+        assert "'region': 1" in caplog.text
+
+    def test_log_drops_names_location_and_coords(self, caplog):
+        caplog.set_level("INFO")
+        filter_records([_uvaly(location="Beroun", lat=49.96, lon=14.07)], CFG, log_drops=True)
+        assert "Dropped region: Beroun (49.96, 14.07)" in caplog.text
+
+    def test_no_per_record_log_by_default(self, caplog):
+        caplog.set_level("INFO")
+        filter_records([_uvaly(location="Beroun", lat=49.96, lon=14.07)], CFG)
+        assert "Dropped region" not in caplog.text
+
+    def test_empty_input(self, caplog):
+        caplog.set_level("INFO")
+        assert filter_records([], CFG, log_drops=True) == []
+        assert caplog.text == ""
