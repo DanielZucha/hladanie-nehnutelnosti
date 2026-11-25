@@ -10,7 +10,7 @@ import requests
 
 from src.config import AppConfig, load_config
 from src.drive_sync import download_csv, ensure_remote_folder, upload_csv
-from src.gmail_client import fetch_unread_alerts, mark_batch_as_read, send_html_email
+from src.gmail_client import fetch_new_alerts, label_processed, send_html_email
 from src.locate import locate_records
 from src.parsers import ceskereality, idnes, sreality
 from src.region_filter import filter_records
@@ -32,9 +32,11 @@ def _session(config: AppConfig) -> requests.Session:
     return session
 
 
-def _merge(config: AppConfig, records: list[PropertyRecord], label: str) -> None:
+def _merge(
+    config: AppConfig, records: list[PropertyRecord], label: str, log_drops: bool = False,
+) -> None:
     """Apply hard rules, then merge survivors into the master CSV."""
-    records = filter_records(records, config.search)
+    records = filter_records(records, config.search, log_drops)
     if not records:
         logger.info("%s: nothing passed the rules", label)
         return
@@ -47,7 +49,7 @@ def _merge(config: AppConfig, records: list[PropertyRecord], label: str) -> None
 def run_parse(config_path: str = "config.yaml") -> None:
     """Fetch iDNES/ceskereality alert emails, enrich from detail pages, locate, merge."""
     config = load_config(config_path)
-    emails = fetch_unread_alerts(
+    emails = fetch_new_alerts(
         config.email.address, config.email.app_password, config.email.alert_senders,
     )
     if not emails:
@@ -70,11 +72,12 @@ def run_parse(config_path: str = "config.yaml") -> None:
             records.extend(idnes.email_listings_to_records(parsed, session, delay))
         # Domain + subject only (no addresses in public CI logs); 0 on a real alert means the format changed.
         logger.info("Email %s | %s: %d listings", sender.split("@")[-1].rstrip(">"), em["subject"], len(parsed))
-        processed.append(em["uid"])
+        if parsed:  # 0 may be a parser bug: leave unlabelled so a fixed parser retries it
+            processed.append(em["uid"])
 
-    # Mark read only after a successful merge, so a failed run retries the same alerts.
-    _merge(config, locate_records(records), "Email alerts")
-    mark_batch_as_read(config.email.address, config.email.app_password, processed)
+    # Label only after a successful merge, so a failed run retries the same alerts.
+    _merge(config, locate_records(records), "Email alerts", log_drops=True)
+    label_processed(config.email.address, config.email.app_password, processed)
 
 
 def run_scrape(config_path: str = "config.yaml") -> None:
