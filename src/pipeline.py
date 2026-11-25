@@ -66,7 +66,7 @@ def run_parse(config_path: str = "config.yaml") -> None:
         parsed: list = []
         if html and "ceskereality" in sender:
             parsed = ceskereality.parse_email_html(html)
-            records.extend(ceskereality.enrich_from_email(parsed, session, delay))
+            records.extend(ceskereality.email_listings_to_records(parsed))
         elif html and "idnes" in sender:
             parsed = idnes.parse_email_html(html)
             records.extend(idnes.email_listings_to_records(parsed, session, delay))

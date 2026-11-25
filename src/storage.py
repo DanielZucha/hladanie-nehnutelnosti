@@ -36,7 +36,7 @@ class PropertyRecord:
     scrape_date: str = ""  # ISO date, first seen
     last_updated: str = ""  # ISO datetime
     composite_score: Optional[float] = None
-    enrichment_status: str = "pending"  # pending / done / failed
+    enrichment_status: str = "pending"  # pending / done / partial / email_only
     notes: str = ""  # manual notes column
 
 
