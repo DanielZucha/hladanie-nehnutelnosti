@@ -6,6 +6,7 @@ token.json
 
 # Data (synced via Google Drive, not git)
 data/master*.csv
+data/last_report.txt
 data/price_history.csv
 data/failed_parses/
 

@@ -4,6 +4,7 @@ import logging
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -99,8 +100,29 @@ def report_cutoff(today: date) -> str:
     return (today - timedelta(days=days)).isoformat()
 
 
+def read_last_report(path: str | Path) -> Optional[str]:
+    """ISO date of the last sent report, or None when the file is missing or unreadable."""
+    try:
+        return date.fromisoformat(Path(path).read_text().strip()).isoformat()
+    except (OSError, ValueError):
+        return None
+
+
+def write_last_report(path: str | Path, day: date) -> None:
+    """Record the date a report was sent."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(day.isoformat() + "\n")
+
+
+def report_since(last_report: Optional[str], today: date) -> str:
+    """Report listings first seen after the last sent report; fixed Tue/Fri window if unknown."""
+    if last_report and last_report <= today.isoformat():
+        return last_report
+    return report_cutoff(today)
+
+
 def run_report(config_path: str = "config.yaml") -> None:
-    """Score, pick and email the report for listings first seen in the last 4 days."""
+    """Score, pick and email the report for listings first seen since the last sent report."""
     config = load_config(config_path)
     df = read_master(config.data.master_csv)
     if df.empty:
@@ -110,7 +132,9 @@ def run_report(config_path: str = "config.yaml") -> None:
     scored = score_dataframe(df, config.scoring)
     write_master(scored, config.data.master_csv)
 
-    new_listings = scored[scored["scrape_date"] > report_cutoff(date.today())]
+    since = report_since(read_last_report(config.data.last_report_file), date.today())
+    logger.info("Reporting listings first seen after %s", since)
+    new_listings = scored[scored["scrape_date"] > since]
     if new_listings.empty:
         logger.info("No new listings since last report. Skipping.")
         return
@@ -131,6 +155,7 @@ def run_report(config_path: str = "config.yaml") -> None:
         html_body=html,
         inline_images={"scatter_plot": generate_scatter_plot(scored, pick_ids)},
     )
+    write_last_report(config.data.last_report_file, date.today())
     logger.info("Report sent to %d recipients", len(config.email.report_recipients))
 
 
@@ -143,6 +168,7 @@ def run_sync_up(config_path: str = "config.yaml") -> None:
         return
     ensure_remote_folder(config.drive.remote_folder)
     upload_csv(master_path, config.drive.remote_folder)
+    upload_csv(config.data.last_report_file, config.drive.remote_folder)  # skipped if absent
 
 
 def run_sync_down(config_path: str = "config.yaml") -> None:
@@ -150,6 +176,7 @@ def run_sync_down(config_path: str = "config.yaml") -> None:
     config = load_config(config_path)
     ensure_remote_folder(config.drive.remote_folder)
     download_csv(config.drive.remote_folder, Path(config.data.master_csv))
+    download_csv(config.drive.remote_folder, Path(config.data.last_report_file))
 
 
 def _ingest(config_path: str) -> list[str]:

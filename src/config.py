@@ -82,6 +82,7 @@ class DriveConfig(BaseModel):
 
 class DataConfig(BaseModel):
     master_csv: str = "data/master_v2.csv"
+    last_report_file: str = "data/last_report.txt"  # ISO date of the last sent report, synced to Drive
     price_history_csv: str = "data/price_history.csv"
     failed_parses_dir: str = "data/failed_parses"
 
