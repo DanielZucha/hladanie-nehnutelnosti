@@ -1,123 +1,123 @@
-"""Tests for region filtering logic."""
+"""Tests for the hard listing rules (region corridor, train, size, price, walls)."""
 
-from src.region_filter import is_in_target_region, filter_records
+import pytest
+
+from src.config import SearchConfig
+from src.region_filter import filter_records, is_prague, passes_rules
 from src.storage import PropertyRecord
 
-
-class TestTextMatching:
-    """Text-based matching against Praha + 3 target districts."""
-
-    def test_praha_district(self):
-        assert is_in_target_region("Broumarská, Praha 9 - Kyje", "Praha 9")
-
-    def test_praha_bare(self):
-        assert is_in_target_region("Somewhere, Praha", "Praha")
-
-    def test_praha_vychod(self):
-        assert is_in_target_region("Říčany, okres Praha-východ", "Praha-východ")
-
-    def test_kolin(self):
-        assert is_in_target_region("Nová, Veltruby, okres Kolín", "Kolín")
-
-    def test_nymburk(self):
-        assert is_in_target_region("Josefa Mánesa, Nymburk", "Nymburk")
-
-    def test_case_insensitive(self):
-        assert is_in_target_region("PRAHA 5", "PRAHA 5")
-
-    # Rejected: other Středočeský districts no longer in scope
-    def test_kladno_rejected(self):
-        assert not is_in_target_region("Kladno - Kročehlavy", "Kladno")
-
-    def test_benesov_rejected(self):
-        assert not is_in_target_region("Benešov", "Benešov")
-
-    def test_beroun_rejected(self):
-        assert not is_in_target_region("Beroun", "Beroun")
-
-    # Rejected: other regions
-    def test_brno_rejected(self):
-        assert not is_in_target_region("Brno - Bohunice, okres Brno-město", "Brno-město")
-
-    def test_ostrava_rejected(self):
-        assert not is_in_target_region("Ostrava - Poruba", "Ostrava-město")
-
-    def test_empty_strings(self):
-        assert not is_in_target_region("", "")
+CFG = SearchConfig()
 
 
-class TestGpsFallback:
-    """GPS bounding box for towns without okres in the district field."""
+def _rec(**kw) -> PropertyRecord:
+    """Valid Prague apartment; override fields per test."""
+    base = dict(
+        url="u", property_type="apartment", size_category="3+kk", size_sqm=85.0,
+        price_total=9_000_000, location="Vítkova, Praha 8 - Karlín",
+        district="Praha 8", building_type="cihlová",
+    )
+    base.update(kw)
+    return PropertyRecord(**base)
 
-    def test_cesky_brod_by_gps(self):
-        # Český Brod: ~50.07N, 14.86E (okres Kolín)
-        assert is_in_target_region("Slezská, Český Brod", "Český Brod",
-                                   lat=50.07, lon=14.86)
 
-    def test_brandys_by_gps(self):
-        # Brandýs nad Labem: ~50.19N, 14.66E (okres Praha-východ)
-        assert is_in_target_region(
-            "Třebízského, Brandýs nad Labem", "Brandýs nad Labem",
-            lat=50.19, lon=14.66,
-        )
+def _uvaly(**kw) -> PropertyRecord:
+    """Valid Úvaly house near the station; override fields per test."""
+    base = dict(
+        property_type="house", size_category="", location="Smrková, Úvaly",
+        district="Praha-východ", lat=50.074, lon=14.73, distance_to_train_km=1.2,
+    )
+    base.update(kw)
+    return _rec(**base)
 
-    def test_brno_gps_still_rejected(self):
-        # Brno: ~49.19N, 16.61E -- well outside bbox
-        assert not is_in_target_region("Brno - Bohunice", "Brno-město",
-                                       lat=49.19, lon=16.61)
 
-    def test_ostrava_gps_still_rejected(self):
-        # Ostrava: ~49.83N, 18.29E -- outside bbox
-        assert not is_in_target_region("Ostrava", "Ostrava-město",
-                                       lat=49.83, lon=18.29)
+class TestIsPrague:
+    @pytest.mark.parametrize("loc,dist", [
+        ("Vítkova, Praha 8 - Karlín", "Praha 8"),
+        ("Broumarská, Praha 9 - Kyje", ""),
+        ("Somewhere", "Praha"),
+    ])
+    def test_prague(self, loc, dist):
+        assert is_prague(loc, dist)
 
-    def test_kladno_gps_rejected(self):
-        # Kladno: ~50.14N, 14.10E -- west of bbox (lon < 14.20)
-        assert not is_in_target_region("Kladno", "Kladno",
-                                       lat=50.14, lon=14.10)
+    @pytest.mark.parametrize("loc,dist", [
+        ("Smrková, Úvaly, okres Praha-východ", "Praha-východ"),
+        ("Úvaly", "Praha-východ"),
+        ("Jesenice, okres Praha-západ", ""),
+        ("", ""),
+    ])
+    def test_not_prague(self, loc, dist):
+        assert not is_prague(loc, dist)
 
-    def test_no_gps_no_text_rejected(self):
-        assert not is_in_target_region("Unknown town", "Unknown")
 
-    def test_none_gps_rejected(self):
-        assert not is_in_target_region("Unknown", "Unknown", lat=None, lon=None)
+class TestRegion:
+    def test_prague_passes_without_gps(self):
+        assert passes_rules(_rec(), CFG)
+
+    def test_uvaly_passes(self):
+        assert passes_rules(_uvaly(), CFG)
+
+    def test_nehvizdy_at_3_8_km_passes(self):
+        assert passes_rules(_uvaly(lat=50.130, lon=14.730, distance_to_train_km=3.8), CFG)
+
+    def test_train_too_far_fails(self):
+        assert not passes_rules(_uvaly(distance_to_train_km=4.5), CFG)
+
+    def test_train_unknown_fails(self):
+        assert not passes_rules(_uvaly(distance_to_train_km=None), CFG)
+
+    def test_missing_coordinates_fail(self):
+        assert not passes_rules(_uvaly(lat=None, lon=None), CFG)
+
+    @pytest.mark.parametrize("lat,lon", [
+        (50.030, 15.200),  # Kolín
+        (49.990, 14.650),  # Říčany
+        (50.190, 14.660),  # Brandýs nad Labem
+        (50.074, 14.860),  # Český Brod
+    ])
+    def test_outside_corridor_fails(self, lat, lon):
+        assert not passes_rules(_uvaly(lat=lat, lon=lon), CFG)
+
+
+class TestListingRules:
+    def test_small_fails(self):
+        assert not passes_rules(_rec(size_sqm=78.9), CFG)
+
+    def test_size_unknown_fails(self):
+        assert not passes_rules(_rec(size_sqm=None), CFG)
+
+    @pytest.mark.parametrize("cat", ["2+kk", "2+1", "1+kk"])
+    def test_small_disposition_fails(self, cat):
+        assert not passes_rules(_rec(size_category=cat), CFG)
+
+    @pytest.mark.parametrize("cat", ["3+kk", "3+1", "4+kk", "5+1", "6+kk"])
+    def test_disposition_passes(self, cat):
+        assert passes_rules(_rec(size_category=cat), CFG)
+
+    def test_house_without_disposition_passes(self):
+        assert passes_rules(_uvaly(size_category=""), CFG)
+
+    @pytest.mark.parametrize("price", [5_999_999, 14_000_001, 10**12])
+    def test_price_out_of_range_fails(self, price):
+        assert not passes_rules(_rec(price_total=price), CFG)
+
+    def test_price_on_request_passes(self):
+        assert passes_rules(_rec(price_total=None), CFG)
+
+    def test_panel_fails(self):
+        assert not passes_rules(_rec(building_type="panelová"), CFG)
+
+    @pytest.mark.parametrize("bt", ["cihlová", "smíšená", "dřevostavba", ""])
+    def test_non_panel_passes(self, bt):
+        assert passes_rules(_rec(building_type=bt), CFG)
+
+    def test_land_fails(self):
+        assert not passes_rules(_rec(property_type="land"), CFG)
 
 
 class TestFilterRecords:
-    def _make_record(self, location: str, district: str,
-                     lat=None, lon=None) -> PropertyRecord:
-        return PropertyRecord(
-            property_id="test",
-            source="test",
-            location=location,
-            district=district,
-            lat=lat,
-            lon=lon,
-        )
+    def test_empty(self):
+        assert filter_records([], CFG) == []
 
-    def test_keeps_prague(self):
-        records = [self._make_record("Praha 3 - Žižkov", "Praha 3")]
-        assert len(filter_records(records)) == 1
-
-    def test_drops_brno(self):
-        records = [self._make_record("Brno - Bohunice", "Brno-město",
-                                     lat=49.19, lon=16.61)]
-        assert len(filter_records(records)) == 0
-
-    def test_keeps_by_gps_fallback(self):
-        records = [self._make_record("Slezská, Český Brod", "Český Brod",
-                                     lat=50.07, lon=14.86)]
-        assert len(filter_records(records)) == 1
-
-    def test_mixed(self):
-        records = [
-            self._make_record("Praha 5 - Smíchov", "Praha 5"),
-            self._make_record("Brno", "Brno-město", lat=49.19, lon=16.61),
-            self._make_record("Český Brod", "Český Brod", lat=50.07, lon=14.86),
-            self._make_record("Kladno", "Kladno", lat=50.14, lon=14.10),
-        ]
-        kept = filter_records(records)
-        assert len(kept) == 2
-        locs = [r.location for r in kept]
-        assert "Praha 5 - Smíchov" in locs
-        assert "Český Brod" in locs
+    def test_one_kept_one_dropped(self):
+        kept = filter_records([_rec(url="a"), _rec(url="b", size_sqm=50.0)], CFG)
+        assert [r.url for r in kept] == ["a"]

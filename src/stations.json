@@ -1,0 +1,210 @@
+{
+ "source": "OSM Overpass, railway=station|halt without subway, bbox 49.985,14.48,50.215,14.84, fetched 2026-11-25",
+ "stations": [
+  {
+   "name": "Brandýs nad Labem",
+   "lat": 50.18347,
+   "lon": 14.6552
+  },
+  {
+   "name": "Brandýs nad Labem zastávka",
+   "lat": 50.18034,
+   "lon": 14.67805
+  },
+  {
+   "name": "Brandýs nad Labem-Zápská",
+   "lat": 50.18362,
+   "lon": 14.66495
+  },
+  {
+   "name": "Hovorčovice",
+   "lat": 50.18051,
+   "lon": 14.52766
+  },
+  {
+   "name": "Lysá nad Labem-Dvorce",
+   "lat": 50.20019,
+   "lon": 14.80183
+  },
+  {
+   "name": "Lázně Toušeň",
+   "lat": 50.16861,
+   "lon": 14.71142
+  },
+  {
+   "name": "Mochov",
+   "lat": 50.13645,
+   "lon": 14.79468
+  },
+  {
+   "name": "Mochov zastávka",
+   "lat": 50.14524,
+   "lon": 14.76923
+  },
+  {
+   "name": "Mstětice",
+   "lat": 50.13601,
+   "lon": 14.68961
+  },
+  {
+   "name": "Měšice u Prahy",
+   "lat": 50.20465,
+   "lon": 14.51353
+  },
+  {
+   "name": "Otradovice",
+   "lat": 50.20606,
+   "lon": 14.74613
+  },
+  {
+   "name": "Polerady nad Labem",
+   "lat": 50.20475,
+   "lon": 14.60998
+  },
+  {
+   "name": "Praha-Běchovice",
+   "lat": 50.08223,
+   "lon": 14.59794
+  },
+  {
+   "name": "Praha-Běchovice střed",
+   "lat": 50.08361,
+   "lon": 14.61496
+  },
+  {
+   "name": "Praha-Dolní Počernice",
+   "lat": 50.08832,
+   "lon": 14.56921
+  },
+  {
+   "name": "Praha-Horní Měcholupy",
+   "lat": 50.04809,
+   "lon": 14.56548
+  },
+  {
+   "name": "Praha-Horní Počernice",
+   "lat": 50.11658,
+   "lon": 14.61199
+  },
+  {
+   "name": "Praha-Hostivař",
+   "lat": 50.05502,
+   "lon": 14.53884
+  },
+  {
+   "name": "Praha-Kbely",
+   "lat": 50.13483,
+   "lon": 14.55582
+  },
+  {
+   "name": "Praha-Klánovice",
+   "lat": 50.08715,
+   "lon": 14.6636
+  },
+  {
+   "name": "Praha-Kolovraty",
+   "lat": 50.01379,
+   "lon": 14.62607
+  },
+  {
+   "name": "Praha-Kyje",
+   "lat": 50.09726,
+   "lon": 14.54431
+  },
+  {
+   "name": "Praha-Libeň",
+   "lat": 50.10076,
+   "lon": 14.50181
+  },
+  {
+   "name": "Praha-Rajská zahrada",
+   "lat": 50.10762,
+   "lon": 14.56012
+  },
+  {
+   "name": "Praha-Satalice",
+   "lat": 50.123,
+   "lon": 14.57076
+  },
+  {
+   "name": "Praha-Uhříněves",
+   "lat": 50.03368,
+   "lon": 14.59161
+  },
+  {
+   "name": "Praha-Vysočany",
+   "lat": 50.11228,
+   "lon": 14.49724
+  },
+  {
+   "name": "Praha-Zahradní Město",
+   "lat": 50.06216,
+   "lon": 14.50357
+  },
+  {
+   "name": "Praha-Čakovice",
+   "lat": 50.14888,
+   "lon": 14.51945
+  },
+  {
+   "name": "Praha-Čakovice severní nástupiště",
+   "lat": 50.14924,
+   "lon": 14.51977
+  },
+  {
+   "name": "Praha-Čakovice zámecký park",
+   "lat": 50.15497,
+   "lon": 14.5189
+  },
+  {
+   "name": "Rostoklaty",
+   "lat": 50.07867,
+   "lon": 14.80581
+  },
+  {
+   "name": "Stará Boleslav",
+   "lat": 50.20981,
+   "lon": 14.69232
+  },
+  {
+   "name": "Tuklaty",
+   "lat": 50.07698,
+   "lon": 14.77046
+  },
+  {
+   "name": "Zeleneč",
+   "lat": 50.13029,
+   "lon": 14.66552
+  },
+  {
+   "name": "Zlonín",
+   "lat": 50.21486,
+   "lon": 14.50751
+  },
+  {
+   "name": "Úvaly",
+   "lat": 50.07504,
+   "lon": 14.72266
+  },
+  {
+   "name": "Čelákovice",
+   "lat": 50.15821,
+   "lon": 14.75451
+  },
+  {
+   "name": "Čelákovice zastávka",
+   "lat": 50.15985,
+   "lon": 14.7354
+  },
+  {
+   "name": "Čelákovice-Jiřina",
+   "lat": 50.16755,
+   "lon": 14.76546
+  },
+  {
+   "name": "Říčany",
+   "lat": 49.99771,
+   "lon": 14.66352
+  }
+ ]
+}

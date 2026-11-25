@@ -43,7 +43,7 @@ def ensure_remote_folder(folder_name: str) -> str:
 def download_csv(
     remote_folder: str,
     local_path: str | Path,
-    filename: str = "master.csv",
+    filename: str | None = None,
 ) -> bool:
     """Download master CSV from Google Drive via rclone.
 
@@ -51,6 +51,7 @@ def download_csv(
     """
     local_path = Path(local_path)
     local_path.parent.mkdir(parents=True, exist_ok=True)
+    filename = filename or local_path.name
 
     remote = f"{REMOTE_NAME}:{remote_folder}/{filename}"
 
@@ -68,13 +69,14 @@ def download_csv(
 def upload_csv(
     local_path: str | Path,
     remote_folder: str,
-    filename: str = "master.csv",
+    filename: str | None = None,
 ) -> None:
     """Upload master CSV to Google Drive via rclone."""
     local_path = Path(local_path)
     if not local_path.exists():
         logger.info("No file to upload: %s", local_path)
         return
+    filename = filename or local_path.name
 
     remote = f"{REMOTE_NAME}:{remote_folder}/{filename}"
     _run_rclone(["copyto", str(local_path), remote])

@@ -31,6 +31,7 @@ class PropertyRecord:
     lat: Optional[float] = None
     lon: Optional[float] = None
     distance_to_train_km: Optional[float] = None
+    building_type: str = ""  # cihlová / panelová / smíšená / ...
     energy_efficiency_rating: str = ""  # A-G
     scrape_date: str = ""  # ISO date, first seen
     last_updated: str = ""  # ISO datetime

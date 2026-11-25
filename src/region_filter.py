@@ -1,101 +1,73 @@
-"""Region filter: drop listings outside configured target regions.
+"""Hard listing rules: every source passes through here before it reaches the master CSV.
 
-Target: Praha + okres Praha-východ, Kolín, Nymburk.
-
-Two-tier check:
-1. Text match on location/district against Praha + target okres names
-2. GPS bounding box fallback for listings with coordinates
+Rules: Praha, or the east corridor up to Úvaly/Nehvizdy with a train station
+within reach; apartment or house; 79+ m2; 3+kk or larger; 6-14M CZK; not panel.
 """
 
 import logging
 import re
 from typing import Optional
 
+from src.config import SearchConfig
 from src.storage import PropertyRecord
 
 logger = logging.getLogger(__name__)
 
-# Target districts (okres) east of Prague
-TARGET_DISTRICTS = [
-    "Praha-východ",
-    "Kolín",
-    "Nymburk",
-]
-
-_PRAHA_RE = re.compile(r"Praha", re.IGNORECASE)
-_OKRES_PATTERNS = [
-    re.compile(rf"\b{re.escape(d)}\b", re.IGNORECASE)
-    for d in TARGET_DISTRICTS
-]
-
-# Bounding box covering Praha + Praha-východ + Kolín + Nymburk.
-# Slightly generous to catch border towns.
-#   South: ~49.85 (south edge of Praha-východ, near Říčany/Kostelec)
-#   North: ~50.35 (north edge of Nymburk district)
-#   West:  ~14.20 (west edge of Prague)
-#   East:  ~15.35 (east edge of Kolín district)
-_BBOX_LAT_MIN = 49.85
-_BBOX_LAT_MAX = 50.35
-_BBOX_LON_MIN = 14.20
-_BBOX_LON_MAX = 15.35
+# "Praha", "Praha 8", "Praha 9 - Kyje"; not "Praha-východ" / "okres Praha-západ".
+_PRAHA_RE = re.compile(r"\bPraha(?![-\s]*(?:východ|západ))\b", re.IGNORECASE)
+_ROOMS_RE = re.compile(r"^(\d+)\s*\+")
 
 
-def _text_matches_region(location: str, district: str) -> bool:
-    """Check location/district strings against known region names."""
-    combined = f"{location} {district}"
-
-    if _PRAHA_RE.search(combined):
-        return True
-
-    for pat in _OKRES_PATTERNS:
-        if pat.search(combined):
-            return True
-
-    return False
+def is_prague(location: str, district: str) -> bool:
+    """True for listings inside Prague city limits."""
+    return bool(_PRAHA_RE.search(f"{district} | {location}"))
 
 
-def _gps_in_bbox(lat: Optional[float], lon: Optional[float]) -> bool:
-    """Check if GPS coordinates fall within the target bounding box."""
+def _in_corridor(lat: Optional[float], lon: Optional[float], cfg: SearchConfig) -> bool:
+    """True when coordinates fall inside the configured east corridor box."""
     if lat is None or lon is None:
         return False
-    return (
-        _BBOX_LAT_MIN <= lat <= _BBOX_LAT_MAX
-        and _BBOX_LON_MIN <= lon <= _BBOX_LON_MAX
-    )
+    box = cfg.corridor
+    return box.lat_min <= lat <= box.lat_max and box.lon_min <= lon <= box.lon_max
 
 
-def is_in_target_region(
-    location: str,
-    district: str,
-    lat: Optional[float] = None,
-    lon: Optional[float] = None,
-) -> bool:
-    """Return True if the listing is in Praha, Praha-východ, Kolín, or Nymburk.
+def _fail_reason(rec: PropertyRecord, cfg: SearchConfig) -> str:
+    """Return why a record breaks a rule, or "" when it passes all of them."""
+    if rec.property_type not in ("apartment", "house"):
+        return "type"
+    if rec.size_sqm is None or rec.size_sqm < cfg.min_area_sqm:
+        return "area"
+    rooms = _ROOMS_RE.match(rec.size_category or "")
+    if rec.property_type == "apartment" and rooms and int(rooms.group(1)) < cfg.min_rooms:
+        return "disposition"
+    # Price on request (None) is kept: it cannot be judged, and the agent may still fit.
+    if rec.price_total is not None and not (cfg.price_min_czk <= rec.price_total <= cfg.price_max_czk):
+        return "price"
+    if "panel" in (rec.building_type or "").lower():
+        return "panel"
+    if is_prague(rec.location, rec.district):
+        return ""
+    if not _in_corridor(rec.lat, rec.lon, cfg):
+        return "region"
+    if rec.distance_to_train_km is None or rec.distance_to_train_km > cfg.train_max_km:
+        return "train"
+    return ""
 
-    Uses text matching first, then falls back to GPS bounding box.
-    """
-    if _text_matches_region(location, district):
-        return True
 
-    return _gps_in_bbox(lat, lon)
+def passes_rules(rec: PropertyRecord, cfg: SearchConfig) -> bool:
+    """True when the record satisfies every hard rule."""
+    return _fail_reason(rec, cfg) == ""
 
 
-def filter_records(records: list[PropertyRecord]) -> list[PropertyRecord]:
-    """Keep only records inside target regions. Logs dropped count."""
-    kept = []
-    dropped = 0
-
+def filter_records(records: list[PropertyRecord], cfg: SearchConfig) -> list[PropertyRecord]:
+    """Keep records passing all hard rules; log drop counts per rule."""
+    kept, dropped = [], {}
     for rec in records:
-        if is_in_target_region(rec.location, rec.district, rec.lat, rec.lon):
-            kept.append(rec)
+        reason = _fail_reason(rec, cfg)
+        if reason:
+            dropped[reason] = dropped.get(reason, 0) + 1
         else:
-            logger.info(
-                "Filtered out (outside region): %s -- %s, %s",
-                rec.url, rec.location, rec.district,
-            )
-            dropped += 1
-
+            kept.append(rec)
     if dropped:
-        logger.info("Region filter: kept %d, dropped %d", len(kept), dropped)
-
+        logger.info("Rules: kept %d, dropped %s", len(kept), dropped)
     return kept

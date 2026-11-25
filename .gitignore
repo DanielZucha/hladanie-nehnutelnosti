@@ -5,7 +5,7 @@ token.json
 .env
 
 # Data (synced via Google Drive, not git)
-data/master.csv
+data/master*.csv
 data/price_history.csv
 data/failed_parses/
 

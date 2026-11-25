@@ -10,6 +10,7 @@ import email
 import imaplib
 import logging
 import smtplib
+from datetime import datetime, timedelta
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -28,8 +29,11 @@ def fetch_unread_alerts(
     app_password: str,
     sender_addresses: list[str],
     max_results: int = 50,
+    since_days: int = 7,
 ) -> list[dict]:
-    """Fetch unread emails from specified senders via IMAP.
+    """Fetch unread emails from specified senders via IMAP, newer than since_days.
+
+    The SINCE bound stops a backlog of stale alerts (e.g. after downtime) from flooding one run.
 
     Returns list of dicts with: uid, sender, subject, html_body, date.
     """
@@ -40,7 +44,8 @@ def fetch_unread_alerts(
     all_messages = []
 
     for sender in sender_addresses:
-        criteria = f'(UNSEEN FROM "{sender}")'
+        since = (datetime.now() - timedelta(days=since_days)).strftime("%d-%b-%Y")
+        criteria = f'(UNSEEN FROM "{sender}" SINCE {since})'
         status, data = conn.search(None, criteria)
 
         if status != "OK" or not data[0]:

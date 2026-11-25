@@ -3,35 +3,37 @@ email:
   # Set these in .env or as environment variables
   address: ""  # overridden by EMAIL_ADDRESS env var
   app_password: ""  # overridden by EMAIL_APP_PASSWORD env var
-  alert_senders:
-    - "info@sreality.cz"
-    - "noreply@reality.idnes.cz"
-    - "hlidac@ceskereality.cz"
+  alert_senders:  # IMAP FROM is a substring match
+    - "reality.idnes.cz"
+    - "ceskereality.cz"
   report_recipients: []  # overridden by REPORT_RECIPIENTS env var (comma-separated)
   report_days: [1, 4]  # Tuesday=1, Friday=4
   report_hour_cet: 9
 
 search:
-  regions:
-    - "Praha"
-    - "Praha-východ"
-    - "Kolín"
-    - "Nymburk"
-  sreality_region_id: 10           # Praha
-  sreality_district_ids: "56|51|55"  # Praha-východ, Kolín, Nymburk
-  price_max_czk: 17000000
+  # Hard rules, applied to every source (src/region_filter.py)
+  sreality_region_id: 10            # Praha
+  sreality_district_ids: "56"       # Praha-východ
+  apartment_sub_cbs: "6,7,8,9,10,11,12"  # 3+kk .. 6+ (sreality ids)
+  house_sub_cbs: "37,39,54"         # rodinný, vila, vícegenerační
+  building_types: "1,2,3,4,6,7,8"   # everything except 5 = panelová
+  price_min_czk: 6000000
+  price_max_czk: 14000000
+  min_area_sqm: 79
   min_rooms: 3
-  property_types:
-    - "apartment"
-    - "house"
+  corridor:                         # Praha-východ belt up to Úvaly / Nehvizdy / Čelákovice
+    lat_min: 50.03
+    lat_max: 50.17
+    lon_min: 14.55
+    lon_max: 14.77
+  train_max_km: 4.0                 # outside Prague, straight line to nearest station
 
 scoring:
   weights:
-    price_attractiveness: 0.35
-    greenery: 0.25
-    transit: 0.20
-    room_count: 0.10
-    property_type: 0.10
+    price_attractiveness: 0.45
+    transit: 0.25
+    room_count: 0.15
+    property_type: 0.15
   price_cap_czk: 12000000
   price_penalty_per_million_over: 10  # -10 points per 1M above cap
   house_premium_tolerance: 0.25  # willing to pay 25% more for houses
@@ -55,34 +57,6 @@ scoring:
     train_within_6km: 50
     no_train: 0
 
-  greenery:
-    private_garden: 95
-    shared_garden: 65
-    park_within_200m: 50
-    terrace_balcony: 25
-    nothing_detected: 0
-    osm_search_radius_m: 300
-
-  location_scores:
-    # Prague districts -- adjust as you learn preferences
-    "Praha 1": 60
-    "Praha 2": 75
-    "Praha 3": 80
-    "Praha 4": 75
-    "Praha 5": 80
-    "Praha 6": 85
-    "Praha 7": 70
-    "Praha 8": 65
-    "Praha 9": 60
-    "Praha 10": 70
-    # Central Bohemia east -- examples, extend as needed
-    "Ricany": 70
-    "Cesky Brod": 55
-    "Benesov": 45
-    "Kolin": 50
-    "Kutna Hora": 45
-    "Brandys nad Labem": 60
-
 enricher:
   request_delay_seconds: [2, 4]
   max_retries: 1
@@ -94,6 +68,6 @@ drive:
   remote_folder: "Home Search - Prague"
 
 data:
-  master_csv: "data/master.csv"
+  master_csv: "data/master_v2.csv"  # v1 = pre-2026-11 rules, left on Drive
   price_history_csv: "data/price_history.csv"
   failed_parses_dir: "data/failed_parses"

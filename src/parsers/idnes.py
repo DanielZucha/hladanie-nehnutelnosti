@@ -113,11 +113,26 @@ def parse_email_html(html: str) -> list[dict]:
     return unique
 
 
+def parse_detail_params(html: str) -> dict:
+    """Pull wall type and usable area from the detail page's dt/dd parameter list."""
+    soup = BeautifulSoup(html, "lxml")
+    params = {
+        dt.get_text(" ", strip=True): dd.get_text(" ", strip=True)
+        for dt in soup.find_all("dt")
+        if (dd := dt.find_next_sibling("dd")) is not None
+    }
+    area = re.search(r"(\d+(?:[.,]\d+)?)", params.get("Užitná plocha", ""))
+    return {
+        "building_type": params.get("Konstrukce budovy", ""),
+        "size_sqm": float(area.group(1).replace(",", ".")) if area else None,
+    }
+
+
 def enrich_from_page(
     url: str,
     session: requests.Session,
 ) -> Optional[dict]:
-    """Fetch an iDNES listing page for additional fields.
+    """Fetch an iDNES listing page for wall type, area, greenery and energy rating.
 
     Returns dict with extra fields or None on failure.
     """
@@ -133,7 +148,6 @@ def enrich_from_page(
 
     greenery_type, greenery_score = detect_greenery_from_text(page_text)
 
-    # Try to extract energy rating
     energy = ""
     energy_match = re.search(r"PENB[:\s]*([A-G])", page_text, re.IGNORECASE)
     if energy_match:
@@ -143,6 +157,7 @@ def enrich_from_page(
         "greenery_type": greenery_type,
         "greenery_score": greenery_score,
         "energy_rating": energy,
+        **parse_detail_params(resp.text),
     }
 
 
@@ -184,8 +199,17 @@ def email_listings_to_records(
         # Enrich from page visit
         enrichment_status = "done"
         energy_rating = ""
+        building_type = ""
         extra = enrich_from_page(url, session)
+        if not extra:
+            # Without the detail page the wall type is unknown, so the panel rule cannot be checked.
+            logger.warning("Dropping idnes listing, detail page unavailable: %s", url)
+            continue
         if extra:
+            building_type = extra["building_type"]
+            size_sqm = extra["size_sqm"] or size_sqm
+            if price and size_sqm:
+                price_per_sqm = round(price / size_sqm, 2)
             if extra["greenery_score"] > greenery_score:
                 greenery_score = extra["greenery_score"]
                 greenery_type = extra["greenery_type"]
@@ -208,6 +232,7 @@ def email_listings_to_records(
             location=location,
             district=district,
             energy_efficiency_rating=energy_rating,
+            building_type=building_type,
             scrape_date=today,
             last_updated=now,
             enrichment_status=enrichment_status,

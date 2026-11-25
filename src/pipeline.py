@@ -2,28 +2,20 @@
 
 import logging
 import sys
-import time
-import random
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import pandas as pd
 import requests
 
-from src.config import load_config
-from src.storage import read_master, write_master, deduplicate_and_merge
-from src.gmail_client import (
-    fetch_unread_alerts,
-    mark_batch_as_read,
-    send_html_email,
-)
-from src.parsers import sreality, ceskereality, idnes
-from src.greenery import compute_final_greenery_score
-from src.transit import compute_transit_score
-from src.scorer import score_dataframe, identify_outliers, identify_categorized_picks
-from src.reporter import generate_report_html, generate_scatter_plot
-from src.drive_sync import ensure_remote_folder, download_csv, upload_csv
+from src.config import AppConfig, load_config
+from src.drive_sync import download_csv, ensure_remote_folder, upload_csv
+from src.gmail_client import fetch_unread_alerts, mark_batch_as_read, send_html_email
+from src.locate import locate_records
+from src.parsers import ceskereality, idnes, sreality
 from src.region_filter import filter_records
+from src.reporter import generate_report_html, generate_scatter_plot
+from src.scorer import identify_categorized_picks, score_dataframe
+from src.storage import PropertyRecord, deduplicate_and_merge, read_master, write_master
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,279 +24,120 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_parse(config_path: str = "config.yaml") -> None:
-    """Fetch alert emails, parse, enrich, deduplicate, save."""
-    config = load_config(config_path)
-
-    emails = fetch_unread_alerts(
-        config.email.address,
-        config.email.app_password,
-        config.email.alert_senders,
-    )
-
-    if not emails:
-        logger.info("No new alert emails. Nothing to do.")
-        return
-
+def _session(config: AppConfig) -> requests.Session:
+    """HTTP session with the configured browser user agent."""
     session = requests.Session()
     session.headers.update({"User-Agent": config.enricher.user_agent})
-    delay = tuple(config.enricher.request_delay_seconds)
+    return session
 
-    all_records = []
-    processed_uids = []
+
+def _merge(config: AppConfig, records: list[PropertyRecord], label: str) -> None:
+    """Apply hard rules, then merge survivors into the master CSV."""
+    records = filter_records(records, config.search)
+    if not records:
+        logger.info("%s: nothing passed the rules", label)
+        return
+    path = config.data.master_csv
+    merged, new_count, updated_count = deduplicate_and_merge(read_master(path), records)
+    write_master(merged, path)
+    logger.info("%s: %d new, %d updated, %d total", label, new_count, updated_count, len(merged))
+
+
+def run_parse(config_path: str = "config.yaml") -> None:
+    """Fetch iDNES/ceskereality alert emails, enrich from detail pages, locate, merge."""
+    config = load_config(config_path)
+    emails = fetch_unread_alerts(
+        config.email.address, config.email.app_password, config.email.alert_senders,
+    )
+    if not emails:
+        logger.info("No new alert emails.")
+        return
+
+    session = _session(config)
+    delay = tuple(config.enricher.request_delay_seconds)
+    records: list[PropertyRecord] = []
+    processed: list = []
 
     for em in emails:
-        sender = em["sender"].lower()
-        html = em["html_body"]
-
-        if not html:
-            logger.warning("Empty email body from %s, skipping", sender)
-            processed_uids.append(em["uid"])
-            continue
-
-        records = []
-        if "sreality" in sender:
-            # Skip: sreality listings are covered by daily API scrape
-            logger.info("Skipping sreality email (covered by API scrape)")
-        elif "ceskereality" in sender:
-            parsed = ceskereality.parse_email_html(html)
-            records = ceskereality.enrich_from_email(parsed, session, delay)
-        elif "idnes" in sender:
-            parsed = idnes.parse_email_html(html)
-            records = idnes.email_listings_to_records(parsed, session, delay)
+        sender, html = em["sender"].lower(), em["html_body"]
+        if html and "ceskereality" in sender:
+            records.extend(ceskereality.enrich_from_email(ceskereality.parse_email_html(html), session, delay))
+        elif html and "idnes" in sender:
+            records.extend(idnes.email_listings_to_records(idnes.parse_email_html(html), session, delay))
         else:
-            logger.warning("Unknown sender: %s, skipping", sender)
-            continue
+            logger.info("Skipping email from %s", sender)
+        processed.append(em["uid"])
 
-        logger.info(
-            "Parsed %d listings from %s (%s)",
-            len(records), sender, em["subject"],
-        )
-        all_records.extend(records)
-        processed_uids.append(em["uid"])
+    # Mark read only after a successful merge, so a failed run retries the same alerts.
+    _merge(config, locate_records(records), "Email alerts")
+    mark_batch_as_read(config.email.address, config.email.app_password, processed)
 
-    # Mark processed emails as read
-    mark_batch_as_read(
-        config.email.address,
-        config.email.app_password,
-        processed_uids,
-    )
 
-    if not all_records:
-        logger.info("No listings extracted from emails.")
-        return
-
-    # Drop listings outside target regions (Praha + Středočeský kraj)
-    all_records = filter_records(all_records)
-
-    if not all_records:
-        logger.info("All listings filtered out by region filter.")
-        return
-
-    # Enrich with OSM data (greenery + transit)
-    for rec in all_records:
-        if rec.lat and rec.lon:
-            green_score, green_source = compute_final_greenery_score(
-                keyword_score=rec.greenery_score or 0,
-                keyword_source=rec.greenery_source,
-                lat=rec.lat,
-                lon=rec.lon,
-                osm_radius_m=config.scoring.greenery.osm_search_radius_m,
-            )
-            rec.greenery_score = green_score
-            rec.greenery_source = green_source
-
-            transit_score, dist_km = compute_transit_score(
-                rec.lat, rec.lon, rec.district, rec.location,
-            )
-            rec.distance_to_train_km = dist_km
-
-            # Rate limit OSM queries
-            time.sleep(random.uniform(1.0, 2.0))
-
-    # Load existing, merge, save
-    master_path = config.data.master_csv
-    existing = read_master(master_path)
-    merged, new_count, updated_count = deduplicate_and_merge(existing, all_records)
-    write_master(merged, master_path)
-
-    logger.info(
-        "Master CSV updated: %d new, %d updated, %d total",
-        new_count, updated_count, len(merged),
-    )
+def run_scrape(config_path: str = "config.yaml") -> None:
+    """Fetch the full filtered sreality inventory and merge; first-seen date marks new listings."""
+    config = load_config(config_path)
+    records = sreality.scrape_listings(_session(config), config.search)
+    _merge(config, locate_records(records), "sreality")  # station snapshot backs up missing poi_train_distance
 
 
 def run_score(config_path: str = "config.yaml") -> None:
-    """Run scoring on master CSV."""
+    """Re-score the master CSV."""
     config = load_config(config_path)
-    master_path = config.data.master_csv
-
-    df = read_master(master_path)
+    df = read_master(config.data.master_csv)
     if df.empty:
         logger.info("Master CSV is empty. Nothing to score.")
         return
+    write_master(score_dataframe(df, config.scoring), config.data.master_csv)
 
-    scored = score_dataframe(df, config.scoring)
-    write_master(scored, master_path)
-    logger.info("Scored %d properties", len(scored))
+
+def report_cutoff(today: date) -> str:
+    """Listings first seen after this date are new: Tue looks back to Fri, Fri (and manual runs) 3 days."""
+    days = 4 if today.weekday() == 1 else 3
+    return (today - timedelta(days=days)).isoformat()
 
 
 def run_report(config_path: str = "config.yaml") -> None:
-    """Generate and send the report email."""
+    """Score, pick and email the report for listings first seen in the last 4 days."""
     config = load_config(config_path)
-    master_path = config.data.master_csv
-
-    df = read_master(master_path)
+    df = read_master(config.data.master_csv)
     if df.empty:
         logger.info("Master CSV is empty. No report to send.")
         return
 
     scored = score_dataframe(df, config.scoring)
-    write_master(scored, master_path)
+    write_master(scored, config.data.master_csv)
 
-    # Report only on new arrivals since last report.
-    # Reports run Tue + Fri, so the window is 3-4 days.
-    # Use 4 days to ensure no gap between Fri->Tue.
-    cutoff = (datetime.now() - timedelta(days=4)).strftime("%Y-%m-%d")
-    new_listings = scored[scored["scrape_date"] >= cutoff]
-
+    new_listings = scored[scored["scrape_date"] > report_cutoff(date.today())]
     if new_listings.empty:
         logger.info("No new listings since last report. Skipping.")
         return
 
     picks = identify_categorized_picks(new_listings, per_category=5)
-
-    # Scatter plot: new arrivals highlighted against full dataset
-    all_pick_ids = set()
-    for cat_df in picks.values():
-        all_pick_ids.update(cat_df["property_id"].tolist())
-
-    scatter_bytes = generate_scatter_plot(scored, all_pick_ids)
-
+    pick_ids = {pid for cat in picks.values() for pid in cat["property_id"]}
     html = generate_report_html(
         categorized_picks=picks,
         total_count=len(scored),
         new_count=len(new_listings),
+        weights=config.scoring.weights,
     )
-
     send_html_email(
         email_address=config.email.address,
         app_password=config.email.app_password,
         to=config.email.report_recipients,
         subject=f"Přehled nemovitostí -- {datetime.now().strftime('%d. %m. %Y')}",
         html_body=html,
-        inline_images={"scatter_plot": scatter_bytes},
+        inline_images={"scatter_plot": generate_scatter_plot(scored, pick_ids)},
     )
-    logger.info("Report sent to %s", config.email.report_recipients)
-
-
-def run_scrape(config_path: str = "config.yaml") -> None:
-    """Scrape new sreality arrivals, OSM-enrich, deduplicate, save."""
-    config = load_config(config_path)
-
-    session = requests.Session()
-    session.headers.update({"User-Agent": config.enricher.user_agent})
-
-    logger.info("Scraping new sreality arrivals...")
-    all_records = sreality.scrape_new_listings(
-        session,
-        region_id=config.search.sreality_region_id,
-        district_ids=config.search.sreality_district_ids,
-        price_max=config.search.price_max_czk,
-    )
-
-    if not all_records:
-        logger.info("No new sreality listings today.")
-        return
-
-    all_records = filter_records(all_records)
-
-    if not all_records:
-        logger.info("All new listings filtered out by region filter.")
-        return
-
-    # OSM enrich all new arrivals (~35-50/day, well within Overpass limits)
-    master_path = config.data.master_csv
-    existing = read_master(master_path)
-    existing_ids = set(existing["property_id"].tolist()) if not existing.empty else set()
-
-    enriched_count = 0
-    for rec in all_records:
-        if rec.property_id in existing_ids:
-            continue
-        if rec.lat and rec.lon:
-            green_score, green_source = compute_final_greenery_score(
-                keyword_score=rec.greenery_score or 0,
-                keyword_source=rec.greenery_source,
-                lat=rec.lat,
-                lon=rec.lon,
-                osm_radius_m=config.scoring.greenery.osm_search_radius_m,
-            )
-            rec.greenery_score = green_score
-            rec.greenery_source = green_source
-
-            transit_score, dist_km = compute_transit_score(
-                rec.lat, rec.lon, rec.district, rec.location,
-            )
-            rec.distance_to_train_km = dist_km
-            enriched_count += 1
-
-            time.sleep(random.uniform(1.0, 2.0))
-
-    logger.info("OSM-enriched %d new sreality records", enriched_count)
-
-    merged, new_count, updated_count = deduplicate_and_merge(existing, all_records)
-    write_master(merged, master_path)
-
-    logger.info(
-        "Scrape merge: %d new, %d price-updated, %d total",
-        new_count, updated_count, len(merged),
-    )
-
-
-def run_scrape_full(config_path: str = "config.yaml") -> None:
-    """One-time full regional inventory scrape. No OSM enrichment."""
-    config = load_config(config_path)
-
-    session = requests.Session()
-    session.headers.update({"User-Agent": config.enricher.user_agent})
-
-    logger.info("Starting full sreality region scrape...")
-    all_records = sreality.scrape_region_listings(
-        session,
-        region_id=config.search.sreality_region_id,
-        district_ids=config.search.sreality_district_ids,
-        price_max=config.search.price_max_czk,
-    )
-
-    if not all_records:
-        logger.info("No listings from region scrape.")
-        return
-
-    all_records = filter_records(all_records)
-    if not all_records:
-        return
-
-    master_path = config.data.master_csv
-    existing = read_master(master_path)
-    merged, new_count, updated_count = deduplicate_and_merge(existing, all_records)
-    write_master(merged, master_path)
-
-    logger.info(
-        "Full scrape: %d new, %d price-updated, %d total",
-        new_count, updated_count, len(merged),
-    )
+    logger.info("Report sent to %d recipients", len(config.email.report_recipients))
 
 
 def run_sync_up(config_path: str = "config.yaml") -> None:
     """Upload master CSV to Google Drive via rclone."""
     config = load_config(config_path)
     master_path = Path(config.data.master_csv)
-
     if not master_path.exists():
         logger.info("No master CSV to upload.")
         return
-
     ensure_remote_folder(config.drive.remote_folder)
     upload_csv(master_path, config.drive.remote_folder)
 
@@ -312,38 +145,50 @@ def run_sync_up(config_path: str = "config.yaml") -> None:
 def run_sync_down(config_path: str = "config.yaml") -> None:
     """Download master CSV from Google Drive via rclone."""
     config = load_config(config_path)
-    master_path = Path(config.data.master_csv)
-
     ensure_remote_folder(config.drive.remote_folder)
-    download_csv(config.drive.remote_folder, master_path)
+    download_csv(config.drive.remote_folder, Path(config.data.master_csv))
+
+
+def _ingest(config_path: str) -> list[str]:
+    """Run both sources; one failing must not stop the other. Returns error messages."""
+    errors = []
+    for step in (run_parse, run_scrape):
+        try:
+            step(config_path)
+        except Exception as exc:  # report at the end so the run is marked failed
+            logger.exception("%s failed", step.__name__)
+            errors.append(f"{step.__name__}: {exc}")
+    return errors
+
+
+def _finish(errors: list[str]) -> None:
+    """Exit non-zero when a source failed, so GitHub emails a failure notice."""
+    if errors:
+        logger.error("Completed with errors: %s", errors)
+        sys.exit(1)
 
 
 def run_daily(config_path: str = "config.yaml") -> None:
-    """Full daily pipeline: pull CSV -> parse emails -> scrape region -> score -> push CSV."""
-    logger.info("=== Daily pipeline start ===")
+    """Daily: pull CSV -> emails + sreality -> score -> push CSV."""
     run_sync_down(config_path)
-    run_parse(config_path)
-    run_scrape(config_path)
+    errors = _ingest(config_path)
     run_score(config_path)
     run_sync_up(config_path)
-    logger.info("=== Daily pipeline complete ===")
+    _finish(errors)
 
 
 def run_report_all(config_path: str = "config.yaml") -> None:
-    """Full report pipeline: pull CSV -> parse -> scrape -> score -> report -> push CSV."""
-    logger.info("=== Report pipeline start ===")
+    """Report day: pull CSV -> emails + sreality -> report -> push CSV."""
     run_sync_down(config_path)
-    run_parse(config_path)
-    run_scrape(config_path)
+    errors = _ingest(config_path)
     run_report(config_path)
     run_sync_up(config_path)
-    logger.info("=== Report pipeline complete ===")
+    _finish(errors)
 
 
 COMMANDS = {
     "parse": run_parse,
     "scrape": run_scrape,
-    "scrape-full": run_scrape_full,
     "score": run_score,
     "report": run_report,
     "sync-up": run_sync_up,
@@ -355,13 +200,11 @@ COMMANDS = {
 
 def main() -> None:
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        print(f"Usage: python -m src.pipeline <command>")
-        print(f"Commands: {', '.join(COMMANDS.keys())}")
+        print("Usage: python -m src.pipeline <command>")
+        print(f"Commands: {', '.join(COMMANDS)}")
         sys.exit(1)
-
-    cmd = sys.argv[1]
     config_path = sys.argv[2] if len(sys.argv) > 2 else "config.yaml"
-    COMMANDS[cmd](config_path)
+    COMMANDS[sys.argv[1]](config_path)
 
 
 if __name__ == "__main__":
