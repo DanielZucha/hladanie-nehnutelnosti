@@ -60,12 +60,15 @@ def run_parse(config_path: str = "config.yaml") -> None:
 
     for em in emails:
         sender, html = em["sender"].lower(), em["html_body"]
+        parsed: list = []
         if html and "ceskereality" in sender:
-            records.extend(ceskereality.enrich_from_email(ceskereality.parse_email_html(html), session, delay))
+            parsed = ceskereality.parse_email_html(html)
+            records.extend(ceskereality.enrich_from_email(parsed, session, delay))
         elif html and "idnes" in sender:
-            records.extend(idnes.email_listings_to_records(idnes.parse_email_html(html), session, delay))
-        else:
-            logger.info("Skipping email from %s", sender)
+            parsed = idnes.parse_email_html(html)
+            records.extend(idnes.email_listings_to_records(parsed, session, delay))
+        # Domain + subject only (no addresses in public CI logs); 0 on a real alert means the format changed.
+        logger.info("Email %s | %s: %d listings", sender.split("@")[-1].rstrip(">"), em["subject"], len(parsed))
         processed.append(em["uid"])
 
     # Mark read only after a successful merge, so a failed run retries the same alerts.

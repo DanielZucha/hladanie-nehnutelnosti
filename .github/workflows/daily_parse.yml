@@ -39,10 +39,18 @@ jobs:
           REPORT_RECIPIENTS: ${{ secrets.REPORT_RECIPIENTS }}
         run: python -m src.pipeline daily
 
+
   keepalive:
-    # GitHub disables cron workflows after 60 days without commits; this re-enables them via API.
+    # GitHub disables cron workflows after 60 days without commits; re-enabling via API resets that.
+    # (gautamkrishnar/keepalive-workflow does the same but GitHub blocked that repository.)
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - uses: gautamkrishnar/keepalive-workflow@v2
+      - name: Re-enable scheduled workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for wf in daily_parse.yml biweekly_report.yml; do
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$wf/enable"
+          done
