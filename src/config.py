@@ -36,6 +36,7 @@ class SearchConfig(BaseModel):
     min_rooms: int = 3
     corridor: CorridorBox = CorridorBox()
     train_max_km: float = 4.0
+    exclude_towns: list[str] = ["Škvorec"]  # station near in a straight line, but bus-only in practice
 
 
 class TransitConfig(BaseModel):

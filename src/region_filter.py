@@ -47,6 +47,9 @@ def _fail_reason(rec: PropertyRecord, cfg: SearchConfig) -> str:
         return "panel"
     if is_prague(rec.location, rec.district):
         return ""
+    location = (rec.location or "").casefold()
+    if any(town.casefold() in location for town in cfg.exclude_towns):
+        return "excluded_town"
     if not _in_corridor(rec.lat, rec.lon, cfg):
         return "region"
     if rec.distance_to_train_km is None or rec.distance_to_train_km > cfg.train_max_km:

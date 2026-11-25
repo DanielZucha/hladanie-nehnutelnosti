@@ -78,6 +78,20 @@ class TestRegion:
         assert not passes_rules(_uvaly(lat=lat, lon=lon), CFG)
 
 
+class TestExcludedTowns:
+    def test_skvorec_fails(self):
+        assert not passes_rules(_uvaly(location="Na Výsluní, Škvorec", lat=50.047, distance_to_train_km=3.0), CFG)
+
+    def test_skvorec_part_fails(self):
+        assert not passes_rules(_uvaly(location="Třebohostice, Škvorec, okres Praha-východ"), CFG)
+
+    def test_case_insensitive(self):
+        assert not passes_rules(_uvaly(location="ŠKVOREC"), CFG)
+
+    def test_other_town_passes(self):
+        assert passes_rules(_uvaly(location="Smrková, Úvaly"), CFG)
+
+
 class TestListingRules:
     def test_small_fails(self):
         assert not passes_rules(_rec(size_sqm=78.9), CFG)

@@ -27,6 +27,8 @@ search:
     lon_min: 14.55
     lon_max: 14.77
   train_max_km: 4.0                 # outside Prague, straight line to nearest station
+  exclude_towns:                    # within reach on the map, but bus-only to a train in practice
+    - "Škvorec"
 
 scoring:
   weights:
