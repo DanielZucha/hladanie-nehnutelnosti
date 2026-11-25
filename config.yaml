@@ -71,5 +71,6 @@ drive:
 
 data:
   master_csv: "data/master_v2.csv"  # v1 = pre-2026-11 rules, left on Drive
+  last_report_file: "data/last_report.txt"  # date of last sent report, synced to Drive
   price_history_csv: "data/price_history.csv"
   failed_parses_dir: "data/failed_parses"

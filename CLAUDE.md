@@ -30,7 +30,7 @@ Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 
 House premium tolerance: 25% (effective price reduced before scoring).
 
-## Report Categories (email reports -- new arrivals only, Tue + Fri)
+## Report Categories (Tue + Fri; listings first seen after the last sent report, date in Drive `last_report.txt`)
 - Red dot: Top 10 by composite score
 - Green dot: Top 5 best price/m2
 - Blue dot: Top 5 largest usable area
