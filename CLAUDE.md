@@ -5,15 +5,16 @@ Autonomous property monitoring pipeline for Prague + the Praha-východ belt up t
 Úvaly/Nehvizdy (on the way to Pardubice). Two sources: sreality v1 search API
 (full filtered inventory daily) and iDNES "hlídací pes" emails to the throwaway
 inbox (secret `EMAIL_ADDRESS`). Hard rules in `config.yaml` `search:`: 79+ m2,
-apartment or house, 3+kk+, 6-14M CZK, not panel, train <= 4 km outside Prague.
+apartment or house, 3+kk+, 6-14M CZK, not panel, train <= 4 km outside Prague,
+Škvorec excluded by name (`exclude_towns`: bus-only to a train in practice).
 Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 
 ## Tech Stack
 - **Language**: Python 3.12
 - **Email**: IMAP/SMTP with Gmail App Passwords (no GCP)
 - **Drive sync**: rclone with built-in OAuth (remote: `hladanie-nehnutelnosti`)
-- **Scheduling**: GitHub Actions (daily parse + Tue/Fri reports)
-- **Repo**: DanielZucha/hladanie-nehnutelnosti, default branch: `main` (renamed from `devel` 2026-11-25)
+- **Scheduling**: GitHub Actions, 7:00 UTC. `daily_parse.yml` Sun/Mon/Wed/Thu/Sat; `biweekly_report.yml` Tue/Fri (ingests too). A keepalive job re-enables both via `gh api .../enable` (the gautamkrishnar action is blocked by GitHub)
+- **Repo**: DanielZucha/hladanie-nehnutelnosti, default branch: `main` (renamed from `devel` 2026-11-25). **Public repo**: no email addresses in commits, logs or PR text
 
 ## Data Sources
 - **sreality.cz**: `/api/v1/estates/search` with server-side filters (v2 is 404 since 2026). robots.txt disallows bots: keep volume low.
@@ -30,15 +31,18 @@ Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 
 House premium tolerance: 25% (effective price reduced before scoring).
 
-## Report Categories (Tue + Fri; listings first seen after the last sent report, date in Drive `last_report.txt`)
+## Report Categories (Tue + Fri)
+Listings first seen after the last sent report. The send date lives in Drive `last_report.txt`
+(fallback: fixed Tue/Fri window), so a manual test report does not repeat in the next one.
 - Red dot: Top 10 by composite score
 - Green dot: Top 5 best price/m2
 - Blue dot: Top 5 largest usable area
 
 ## Active Goals
-- [x] Restart with narrowed rules (2026-11-25)
-- [ ] Update iDNES hlídací pes criteria to the new rules
-- [ ] Verify first Tue/Fri report after restart
+- [x] Restart with narrowed rules (2026-11-25); test report sent to all 4 recipients
+- [x] iDNES watchers (4) updated to the new rules (2026-11-25)
+- [ ] Verify Fri 27 Nov report shows only listings first seen 26-27 Nov
+- [ ] Check run logs for a real iDNES alert parsing to > 0 listings
 - [ ] Register ceskereality.cz alerts on throwaway account
 
 ## Key Files
@@ -53,7 +57,8 @@ House premium tolerance: 25% (effective price reduced before scoring).
 | `src/transit.py` + `src/stations.json` | Offline nearest-station lookup (OSM snapshot) |
 | `src/scorer.py` | Weighted scoring + categorized picks |
 | `src/reporter.py` | Czech HTML report + scatter plot |
-| `src/market_analysis.py` | One-time peer-group z-score analysis (not in daily flow) |
+| `src/market_analysis.py` | One-time peer-group z-score analysis (not in daily flow; still reads removed greenery columns) |
+| `.github/workflows/*.yml` | Daily + Tue/Fri runs; keepalive job in daily |
 
 ## Project Journal
 
@@ -77,7 +82,10 @@ House premium tolerance: 25% (effective price reduced before scoring).
 - Next: verify first cron run, tune scoring after viewings
 
 ### 2026-11-25: Restart with narrowed search
-- Workflows had been disabled for inactivity since 2026-06; added keepalive job
-- Sreality v2 API gone -> ported to v1; greenery dropped; corridor Praha -> Úvaly/Nehvizdy
-- iDNES kept via detail page + Nominatim + offline station list (Overpass unreliable)
-- New master_v2.csv; first report covers the whole current filtered inventory
+- Workflows had been disabled for inactivity since 2026-06-02; default branch `devel` renamed `main`
+- Sreality v2 API gone -> ported to v1 (still answers GitHub runners); greenery dropped; corridor Praha -> Úvaly/Nehvizdy
+- iDNES kept via detail page + Nominatim + offline station list (public Overpass mirrors time out)
+- Škvorec excluded after a viewing; other no-station towns (Jirny, Jenštejn, ...) kept by choice
+- New master_v2.csv (old master.csv left on Drive); 510 listings after first runs (~420 Praha, ~90 corridor)
+- Keepalive: third-party action blocked -> direct API call; reports now "since last sent report"
+- PRs 1-3 merged; test report sent 25 Nov
