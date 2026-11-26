@@ -47,7 +47,7 @@ def _merge(
 
 
 def run_parse(config_path: str = "config.yaml") -> None:
-    """Fetch iDNES/ceskereality alert emails, enrich from detail pages, locate, merge."""
+    """Fetch iDNES/ceskereality alert emails, enrich iDNES from detail pages, locate, merge."""
     config = load_config(config_path)
     emails = fetch_new_alerts(
         config.email.address, config.email.app_password, config.email.alert_senders,
@@ -59,7 +59,7 @@ def run_parse(config_path: str = "config.yaml") -> None:
     session = _session(config)
     delay = tuple(config.enricher.request_delay_seconds)
     records: list[PropertyRecord] = []
-    processed: list = []
+    processed: list[str] = []
 
     for em in emails:
         sender, html = em["sender"].lower(), em["html_body"]

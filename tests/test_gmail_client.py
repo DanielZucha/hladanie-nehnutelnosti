@@ -101,3 +101,17 @@ def test_label_processed_empty_is_noop(fake):
     conn = fake({})
     gmail_client.label_processed("a", "p", [])
     assert conn.calls == []
+
+
+def test_max_results_keeps_newest(fake):
+    conn = fake({"reality.idnes.cz": [str(i).encode() for i in range(60)]})
+    gmail_client.fetch_new_alerts("a", "p", ["reality.idnes.cz"], max_results=50)
+    fetched = [c[1] for c in conn.calls if c[0] == "FETCH"]
+    assert fetched[0] == b"10" and fetched[-1] == b"59"
+
+
+def test_label_failure_is_logged(fake, caplog):
+    conn = fake({})
+    conn.uid = lambda command, *args: ("NO", [b"denied"])
+    gmail_client.label_processed("a", "p", ["7"])
+    assert "Label failed for uid 7" in caplog.text

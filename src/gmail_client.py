@@ -56,7 +56,7 @@ def fetch_new_alerts(
             status, data = conn.uid("SEARCH", "X-GM-RAW", f'"{query}"')
             if status != "OK" or not data[0]:
                 continue
-            for uid in data[0].split()[:max_results]:
+            for uid in data[0].split()[-max_results:]:  # newest first when capped
                 status, msg_data = conn.uid("FETCH", uid, "(BODY.PEEK[])")
                 if status != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
                     continue
@@ -83,7 +83,9 @@ def label_processed(email_address: str, app_password: str, uids: list[str]) -> N
     try:
         conn.create(PROCESSED_LABEL)  # NO when it exists already; harmless
         for uid in uids:
-            conn.uid("STORE", uid, "+X-GM-LABELS", f"({PROCESSED_LABEL})")
+            status, _ = conn.uid("STORE", uid, "+X-GM-LABELS", f"({PROCESSED_LABEL})")
+            if status != "OK":  # imaplib returns NO instead of raising; unlabelled alerts get re-fetched
+                logger.warning("Label failed for uid %s", uid)
     finally:
         conn.logout()
 
