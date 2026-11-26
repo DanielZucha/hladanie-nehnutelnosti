@@ -19,7 +19,8 @@ Scores listings, syncs CSV to Google Drive, and emails Czech-language reports.
 ## Data Sources
 - **sreality.cz**: `/api/v1/estates/search` with server-side filters (v2 is 404 since 2026). robots.txt disallows bots: keep volume low.
 - **reality.idnes.cz**: "hlídací pes" alerts; edit via the "přehled všech psů" link in an alert email (no login). Detail page -> wall type/area; Nominatim -> GPS; `src/stations.json` -> train distance
-- **ceskereality.cz**: Parser written, awaiting alert registration
+- **ceskereality.cz**: "Realitní hlídač" alerts, parsed from the email card only (detail pages are behind a bot wall): no price, so price-on-request rules apply; Daniel opens the shortlisted ones by hand (decided 2026-11-25: no bot-wall bypass, no cross-portal enrichment)
+- Alert emails are tracked by the Gmail label `processed`, not the read flag; open them freely
 
 ## Scoring Model (weights in config.yaml, sum to 1.0)
 | Dimension | Weight | Notes |
@@ -43,7 +44,7 @@ Listings first seen after the last sent report. The send date lives in Drive `la
 - [x] iDNES watchers (4) updated to the new rules (2026-11-25)
 - [ ] Verify Fri 27 Nov report shows only listings first seen 26-27 Nov
 - [ ] Check run logs for a real iDNES alert parsing to > 0 listings
-- [ ] Register ceskereality.cz alerts on throwaway account
+- [ ] Narrow the ceskereality watcher: it sends Beroun flats and building plots
 
 ## Key Files
 | File | Purpose |

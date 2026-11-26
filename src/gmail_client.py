@@ -10,7 +10,7 @@ import email
 import imaplib
 import logging
 import smtplib
-from datetime import datetime, timedelta
+from email.header import decode_header, make_header
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -22,82 +22,72 @@ IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
+PROCESSED_LABEL = "processed"  # Gmail label set after a successful merge
 
 
-def fetch_unread_alerts(
+def _connect(email_address: str, app_password: str) -> imaplib.IMAP4_SSL:
+    """Open an IMAP session on the inbox (read-write, so labels can be added)."""
+    conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    conn.login(email_address, app_password)
+    conn.select("INBOX")
+    return conn
+
+
+def fetch_new_alerts(
     email_address: str,
     app_password: str,
     sender_addresses: list[str],
     max_results: int = 50,
     since_days: int = 7,
 ) -> list[dict]:
-    """Fetch unread emails from specified senders via IMAP, newer than since_days.
+    """Fetch alerts from the senders that lack the processed label, newer than since_days.
 
-    The SINCE bound stops a backlog of stale alerts (e.g. after downtime) from flooding one run.
+    The label, not the read flag, tracks what the pipeline has seen, so a human may open
+    alerts freely. BODY.PEEK leaves the read flag as it was. The age bound stops a backlog
+    of stale alerts (e.g. after downtime) from flooding one run.
 
     Returns list of dicts with: uid, sender, subject, html_body, date.
     """
-    conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-    conn.login(email_address, app_password)
-    conn.select("INBOX")
-
+    conn = _connect(email_address, app_password)
     all_messages = []
-
-    for sender in sender_addresses:
-        since = (datetime.now() - timedelta(days=since_days)).strftime("%d-%b-%Y")
-        criteria = f'(UNSEEN FROM "{sender}" SINCE {since})'
-        status, data = conn.search(None, criteria)
-
-        if status != "OK" or not data[0]:
-            continue
-
-        uids = data[0].split()
-        if len(uids) > max_results:
-            uids = uids[:max_results]
-
-        for uid in uids:
-            status, msg_data = conn.fetch(uid, "(RFC822)")
-            if status != "OK":
+    try:
+        for sender in sender_addresses:
+            query = f"from:{sender} -label:{PROCESSED_LABEL} newer_than:{since_days}d"
+            status, data = conn.uid("SEARCH", "X-GM-RAW", f'"{query}"')
+            if status != "OK" or not data[0]:
                 continue
+            for uid in data[0].split()[-max_results:]:  # newest first when capped
+                status, msg_data = conn.uid("FETCH", uid, "(BODY.PEEK[])")
+                if status != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
+                    continue
+                msg = email.message_from_bytes(msg_data[0][1])
+                all_messages.append({
+                    "uid": uid.decode(),
+                    "sender": msg.get("From", ""),
+                    "subject": str(make_header(decode_header(msg.get("Subject", "")))),
+                    "html_body": _extract_html_body(msg) or "",
+                    "date": msg.get("Date", ""),
+                })
+    finally:
+        conn.logout()
 
-            raw = msg_data[0][1]
-            msg = email.message_from_bytes(raw)
-
-            html_body = _extract_html_body(msg)
-
-            all_messages.append({
-                "uid": uid.decode(),
-                "sender": msg.get("From", ""),
-                "subject": msg.get("Subject", ""),
-                "html_body": html_body or "",
-                "date": msg.get("Date", ""),
-            })
-
-    conn.close()
-    conn.logout()
-
-    logger.info("Fetched %d unread alert emails", len(all_messages))
+    logger.info("Fetched %d new alert emails", len(all_messages))
     return all_messages
 
 
-def mark_batch_as_read(
-    email_address: str,
-    app_password: str,
-    uids: list[str],
-) -> None:
-    """Mark multiple messages as read in a single IMAP session."""
+def label_processed(email_address: str, app_password: str, uids: list[str]) -> None:
+    """Add the processed label to the given UIDs in one IMAP session."""
     if not uids:
         return
-
-    conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-    conn.login(email_address, app_password)
-    conn.select("INBOX")
-
-    for uid in uids:
-        conn.store(uid.encode(), "+FLAGS", "\\Seen")
-
-    conn.close()
-    conn.logout()
+    conn = _connect(email_address, app_password)
+    try:
+        conn.create(PROCESSED_LABEL)  # NO when it exists already; harmless
+        for uid in uids:
+            status, _ = conn.uid("STORE", uid, "+X-GM-LABELS", f"({PROCESSED_LABEL})")
+            if status != "OK":  # imaplib returns NO instead of raising; unlabelled alerts get re-fetched
+                logger.warning("Label failed for uid %s", uid)
+    finally:
+        conn.logout()
 
 
 def send_html_email(
